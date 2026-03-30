@@ -5,6 +5,8 @@ export default function VoiceAgent() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState("NATF2.pt"); // Natural Female 2
+  const [assistantPrompt, setAssistantPrompt] = useState("You are Jarvis, a highly intelligent and helpful AI assistant. Keep responses under 2 sentences.");
+  const [isContinuous, setIsContinuous] = useState(true);
   const [transcript, setTranscript] = useState([]);
   
   const mediaRecorderRef = useRef(null);
@@ -44,7 +46,7 @@ export default function VoiceAgent() {
   };
 
   const toggleRecording = () => {
-    if (!isRecording) {
+    if (!isRecording && !isProcessing) {
       startRecording();
     } else {
       stopRecording();
@@ -56,6 +58,7 @@ export default function VoiceAgent() {
     setTranscript(prev => [...prev, { text: "Processing speech...", sender: "system" }]);
     const formData = new FormData();
     formData.append("audio", blob, "recording.webm");
+    formData.append("prompt", assistantPrompt);
 
     try {
       const res = await fetch("http://localhost:8888/api/voice-chat", {
@@ -80,12 +83,22 @@ export default function VoiceAgent() {
       const audioBlob = await res.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
+      
+      audio.onended = () => {
+        if (isContinuous && isRecording) {
+            startRecording(); // Restart recording in continuous loop
+        }
+      };
+
       audio.play();
 
     } catch (err) {
       console.error(err);
       alert(`Backend Error: ${err.message}`);
       setTranscript(prev => [...prev.filter(msg => msg.sender !== 'system'), { text: `Error: ${err.message}`, sender: "system" }]);
+      if (isContinuous && isRecording) {
+         setTimeout(startRecording, 2000); // Wait and retry on error
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -114,30 +127,29 @@ export default function VoiceAgent() {
 
         <div className="bg-[#0a0a0f] border border-white/10 p-8 rounded-2xl mb-8 flex flex-col items-center gap-6">
           
-          {/* Main Visualizer */}
-          <div className="w-full max-w-lg h-48 border border-white/5 bg-black/40 rounded-xl flex items-center justify-center relative overflow-hidden">
+          {/* Main Visualizer - Jarvis UI */}
+          <div className="w-full max-w-lg h-60 border border-white/5 bg-black/40 rounded-xl flex items-center justify-center relative overflow-hidden">
             {isProcessing ? (
-              <div className="flex flex-col items-center gap-3">
+              <div className="flex flex-col items-center gap-3 relative z-10">
                 <Loader2 className="w-10 h-10 text-cyan-400 animate-spin" />
-                <span className="text-xs text-cyan-400 animate-pulse">AI is thinking...</span>
-              </div>
-            ) : isRecording ? (
-              <div className="flex gap-2 items-end justify-center h-24">
-                {[1, 2, 3, 4, 5, 6, 7].map((bar) => (
-                  <div 
-                    key={bar} 
-                    className="w-3 bg-gradient-to-t from-green-500 to-emerald-400 rounded-t-sm"
-                    style={{
-                      height: `${20 + Math.random() * 80}%`,
-                      animation: `bounce ${0.5 + Math.random()}s infinite alternate`
-                    }}
-                  ></div>
-                ))}
+                <span className="text-xs text-cyan-400 animate-pulse font-mono tracking-widest">ANALYZING...</span>
               </div>
             ) : (
-              <div className="flex flex-col items-center opacity-30">
-                <MicOff className="w-12 h-12 text-white mb-2" />
-                <span className="text-sm">Microphone Off</span>
+              <div className={`jarvis-square ${isRecording ? 'jarvis-recording' : ''}`}>
+                <span></span>
+                <span></span>
+                <span></span>
+                {!isRecording && !isProcessing && (
+                  <div className="absolute flex flex-col items-center opacity-30 z-10">
+                    <MicOff className="w-12 h-12 text-cyan-500 mb-2" />
+                    <span className="text-sm font-mono tracking-widest text-cyan-500">SYSTEM IDLE</span>
+                  </div>
+                )}
+                {isRecording && (
+                   <div className="absolute z-10 text-red-500 animate-pulse font-mono tracking-widest text-lg font-bold">
+                     LISTENING...
+                   </div>
+                )}
               </div>
             )}
           </div>
@@ -156,18 +168,39 @@ export default function VoiceAgent() {
                   <option key={v.id} value={v.id} className="bg-[#080810] text-gray-200">{v.name}</option>
                 ))}
               </select>
+              
+              <label className="text-xs text-gray-500 uppercase tracking-widest font-bold mt-2">Assistant Persona (System Prompt)</label>
+              <input 
+                type="text"
+                value={assistantPrompt}
+                onChange={(e) => setAssistantPrompt(e.target.value)}
+                placeholder="You are Jarvis, a helpful assistant..."
+                className="bg-white/5 border border-white/10 rounded-lg p-3 text-sm text-white outline-none focus:border-green-500/50 transition-colors"
+                disabled={isRecording}
+              />
+              
+              <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  checked={isContinuous} 
+                  onChange={(e) => setIsContinuous(e.target.checked)} 
+                  className="accent-cyan-500"
+                />
+                <span className="text-sm text-gray-400">Continuous AI Voice (No need to replay)</span>
+              </label>
             </div>
+
             
             <button
               onClick={toggleRecording}
               disabled={isProcessing}
               className={`mt-6 w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
                 isRecording 
-                  ? 'bg-red-500/20 text-red-500 border border-red-500/50 hover:bg-red-500/30 hover:scale-105'
-                  : 'bg-green-500/20 text-green-400 border border-green-500/50 hover:bg-green-500/30 hover:scale-105'
+                  ? 'jarvis-glow bg-black text-red-500 border border-red-500/50 hover:scale-105'
+                  : 'bg-black text-cyan-400 border border-cyan-500/50 hover:bg-cyan-500/10 hover:scale-105'
               }`}
             >
-              {isProcessing ? <Loader2 className="w-8 h-8 animate-spin" /> : isRecording ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8 ml-1" />}
+              {isProcessing ? <Loader2 className="w-8 h-8 animate-spin" /> : isRecording ? <MicOff className="w-8 h-8 relative z-10" /> : <Mic className="w-8 h-8 ml-1" />}
             </button>
           </div>
 

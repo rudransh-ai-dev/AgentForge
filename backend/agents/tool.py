@@ -45,11 +45,40 @@ Input to process:
 """
 
     result_json = ""
-    async for chunk in async_generate_stream(MODELS.get("manager", "llama3:8b"), system_prompt):
-        result_json += chunk
-        # Throttle UI updates
-        if len(result_json) % 40 == 0:
-            await emitter.emit(run_id, node_id, "update", output_str=f"Parsing structure...\n{result_json[-300:]}")
+    # FAST PATH: Deterministically parse the Hybrid JSON output from Coder Agent
+    if "---JSON---" in prompt:
+        await emitter.emit(run_id, node_id, "update", output_str="Fast parsing JSON payload...")
+        try:
+            # Extract JSON between ---JSON--- and ---OUTPUT--- (or the end of the text)
+            json_text = prompt.split("---JSON---", 1)[1]
+            if "---OUTPUT---" in json_text:
+                json_text = json_text.split("---OUTPUT---", 1)[0]
+            
+            # Find the actual JSON object, it might be a dictionary or a list
+            json_text = strip_prompt_leakage(json_text)
+            parsed_data = json.loads(json_text)
+            
+            # Normalize to the expected tool parsing schema
+            if isinstance(parsed_data, list):
+                project_data = {"files": parsed_data}
+            elif isinstance(parsed_data, dict) and "files" in parsed_data:
+                project_data = parsed_data
+            else:
+                raise ValueError("Format mismatch")
+                
+            result_json = json.dumps(project_data)
+        except Exception as e:
+            # Fallback to LLM if direct parsing fails
+            await emitter.emit(run_id, node_id, "update", output_str=f"Direct parse failed ({e}), falling back to AI parser...")
+            result_json = ""
+            
+    # AI PARSER: Fallback or if ---JSON--- isn't used
+    if not result_json:
+        async for chunk in async_generate_stream(MODELS.get("manager", "llama3:8b"), system_prompt):
+            result_json += chunk
+            # Throttle UI updates
+            if len(result_json) % 40 == 0:
+                await emitter.emit(run_id, node_id, "update", output_str=f"Parsing structure...\n{result_json[-300:]}")
 
     try:
         # Sanitize: strip any prompt leakage before parsing

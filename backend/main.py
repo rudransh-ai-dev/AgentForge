@@ -103,9 +103,9 @@ async def run(query: Query):
             metadata={"latency_ms": agent_latency, "tokens": len(result)}
         )
 
-        # 3. AUTO-TOOL: If coder produced code blocks, auto-save to workspace
+        # 3. AUTO-TOOL: If coder produced code blocks or JSON format, auto-save to workspace
         project_id = decision.get("project_id")
-        if agent_id == "coder" and ("```" in result or "def " in result):
+        if agent_id == "coder" and ("```" in result or "def " in result or "---JSON---" in result):
             tool_result = await run_tool_agent_async(run_id, result, project_id=project_id)
 
             # 4. AUTO-EXECUTE: If files were created successfully, try running
@@ -346,7 +346,7 @@ def _get_whisper():
     return _whisper_model
 
 @app.post("/api/voice-chat")
-async def voice_chat(audio: UploadFile = File(...)):
+async def voice_chat(audio: UploadFile = File(...), prompt: str = Form("You are a helpful voice assistant. Keep responses under 2 sentences.")):
     from fastapi import HTTPException
 
     # 1. Save browser audio blob
@@ -370,10 +370,11 @@ async def voice_chat(audio: UploadFile = File(...)):
         from services.ollama_client import async_generate
         agent_text = await async_generate(
             MODELS.get("analyst", "phi3:mini"),
-            f"You are a helpful voice assistant. Keep responses under 2 sentences. User said: {user_text}"
+            f"{prompt} User said: {user_text}"
         )
         if not agent_text or len(agent_text.strip()) < 2:
             agent_text = f"You said: {user_text}"
+
         print(f"🧠 Reply: {agent_text}")
     except Exception:
         agent_text = f"You said: {user_text}"
@@ -449,3 +450,5 @@ async def restore_image(image: UploadFile = File(...), prompt: str = Form(...)):
         raise HTTPException(status_code=500, detail="Processing finished but no output file was generated.")
 
     return FileResponse(output_path, media_type="image/png")
+
+
