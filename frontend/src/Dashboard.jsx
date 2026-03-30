@@ -3,11 +3,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Terminal, Activity, Sparkles, Search, Cpu, Zap, BrainCircuit, Network,
   Play, StopCircle, FolderTree, Clock, HardDrive, Wifi, MessageSquare,
-  LayoutDashboard, ChevronRight, Square
+  LayoutDashboard, ChevronRight, Square, Radio
 } from 'lucide-react';
 import AgentCanvas from './components/AgentCanvas';
 import WorkspaceExplorer from './components/WorkspaceExplorer';
 import AgentChat from './components/AgentChat';
+import ImageRestorer from './components/ImageRestorer';
+import VoiceAgent from './components/VoiceAgent';
 import { useAgentStore } from './store/useAgentStore';
 
 const API = "http://127.0.0.1:8888";
@@ -69,6 +71,8 @@ export default function Dashboard() {
     { id: 'chat',      icon: <MessageSquare className="w-4 h-4" />, label: 'Agent Chat' },
     { id: 'canvas',    icon: <Network className="w-4 h-4" />,       label: 'Canvas' },
     { id: 'workspace', icon: <FolderTree className="w-4 h-4" />,    label: 'Files', badge: projects.length || null },
+    { id: 'image',     icon: <Sparkles className="w-4 h-4" />,      label: 'Image Restorer' },
+    { id: 'voice',     icon: <Radio className="w-4 h-4" />,         label: 'Voice Agent' },
   ];
 
   const AGENTS_LIST = [
@@ -217,6 +221,16 @@ export default function Dashboard() {
             {activeTab === 'workspace' && (
               <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex">
                 <WorkspaceExplorer />
+              </motion.div>
+            )}
+            {activeTab === 'image' && (
+              <motion.div key="image" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex">
+                <ImageRestorer />
+              </motion.div>
+            )}
+            {activeTab === 'voice' && (
+              <motion.div key="voice" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex">
+                <VoiceAgent />
               </motion.div>
             )}
           </AnimatePresence>

@@ -1,5 +1,5 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from schemas.request import Query, NodeQuery
 from core.router import route_task_async
@@ -328,3 +328,124 @@ async def stop_all():
     await emitter.emit("system", "system", "error", error=f"Execution terminated by user ({cancelled} tasks cancelled)")
     return {"status": "stopped", "cancelled": cancelled}
 
+# ── Voice Agent (100% Local) ───────────────────────────────
+import urllib.parse
+import subprocess
+import tempfile
+
+# Lazy-loaded whisper model
+_whisper_model = None
+VOICE_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "voice", "voice.onnx")
+
+def _get_whisper():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        print("⚡ Loading Whisper tiny (CPU int8)...")
+        _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
+    return _whisper_model
+
+@app.post("/api/voice-chat")
+async def voice_chat(audio: UploadFile = File(...)):
+    from fastapi import HTTPException
+
+    # 1. Save browser audio blob
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
+        f.write(await audio.read())
+        input_path = f.name
+
+    # 2. Transcribe with Whisper (local, CPU)
+    try:
+        whisper = _get_whisper()
+        segments, _ = whisper.transcribe(input_path)
+        user_text = " ".join(s.text for s in segments).strip()
+        if not user_text:
+            user_text = "[No speech detected]"
+        print(f"🎤 Heard: {user_text}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription error: {e}")
+
+    # 3. Generate AI response (connect to your Ollama brain)
+    try:
+        from services.ollama_client import async_generate
+        agent_text = await async_generate(
+            MODELS.get("analyst", "phi3:mini"),
+            f"You are a helpful voice assistant. Keep responses under 2 sentences. User said: {user_text}"
+        )
+        if not agent_text or len(agent_text.strip()) < 2:
+            agent_text = f"You said: {user_text}"
+        print(f"🧠 Reply: {agent_text}")
+    except Exception:
+        agent_text = f"You said: {user_text}"
+
+    # 4. Text-to-Speech with Piper (local, ~50ms)
+    output_path = input_path.replace(".webm", ".wav")
+    try:
+        proc = subprocess.run(
+            f'echo {repr(agent_text)} | python3 -m piper --model "{VOICE_MODEL_PATH}" --output_file "{output_path}"',
+            shell=True, capture_output=True, text=True
+        )
+        if proc.returncode != 0:
+            raise Exception(proc.stderr)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS error: {e}")
+
+    # 5. Return audio + transcript headers
+    headers = {
+        "X-User-Transcript": urllib.parse.quote(user_text),
+        "X-Agent-Transcript": urllib.parse.quote(agent_text),
+        "Access-Control-Expose-Headers": "X-User-Transcript, X-Agent-Transcript"
+    }
+    return FileResponse(output_path, media_type="audio/wav", headers=headers)
+
+
+# ── Image Enhancement (100% Local with Pillow) ────────────
+
+@app.post("/api/restore-image")
+async def restore_image(image: UploadFile = File(...), prompt: str = Form(...)):
+    """Local image enhancement using Pillow filters."""
+    from fastapi import HTTPException
+    from PIL import Image, ImageFilter, ImageEnhance
+    import io
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_in:
+        content = await image.read()
+        temp_in.write(content)
+        input_path = temp_in.name
+
+    output_path = input_path.replace(".png", "_restored.png")
+    prompt_lower = prompt.lower()
+
+    try:
+        img = Image.open(input_path)
+
+        # Apply filters based on prompt keywords
+        if "deblur" in prompt_lower or "sharp" in prompt_lower:
+            img = img.filter(ImageFilter.SHARPEN)
+            img = ImageEnhance.Sharpness(img).enhance(2.0)
+            img = ImageEnhance.Contrast(img).enhance(1.2)
+        elif "denoise" in prompt_lower or "noise" in prompt_lower:
+            img = img.filter(ImageFilter.SMOOTH_MORE)
+            img = img.filter(ImageFilter.SMOOTH)
+        elif "dehaze" in prompt_lower or "haze" in prompt_lower:
+            img = ImageEnhance.Contrast(img).enhance(1.5)
+            img = ImageEnhance.Color(img).enhance(1.3)
+        elif "low-light" in prompt_lower or "bright" in prompt_lower or "dark" in prompt_lower:
+            img = ImageEnhance.Brightness(img).enhance(1.6)
+            img = ImageEnhance.Contrast(img).enhance(1.3)
+            img = ImageEnhance.Color(img).enhance(1.1)
+        else:
+            # General enhance
+            img = img.filter(ImageFilter.SHARPEN)
+            img = ImageEnhance.Contrast(img).enhance(1.2)
+            img = ImageEnhance.Color(img).enhance(1.1)
+
+        img.save(output_path, quality=95)
+        print(f"✅ Image processed: {prompt}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image processing error: {e}")
+
+    if not os.path.exists(output_path):
+        raise HTTPException(status_code=500, detail="Processing finished but no output file was generated.")
+
+    return FileResponse(output_path, media_type="image/png")
