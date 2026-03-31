@@ -1,16 +1,20 @@
+"""
+AI Agent IDE — Main API Server (v3.1 Final)
+============================================
+
+Production-grade multi-agent orchestration server.
+
+Execution Modes:
+  - Direct Mode: User → Model → Response (<2s target)
+  - Agent Mode:  User → Router → Planner → Agent(s) → Manager → Output (<15s target)
+
+All models are VRAM-scheduled through the global pipeline lock.
+"""
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from schemas.request import Query, NodeQuery
-from core.router import route_task_async
-from agents.coder import run_coder_async
-from agents.analyst import run_analyst_async
-from agents.critic import run_critic_async
-from agents.tool import run_tool_agent_async, execute_project_async, autofix_loop_async
-from services.event_emitter import emitter
-from core.memory import store_run, update_pattern, get_run_history, get_stats
-from config import MODELS
-from services.ollama_client import async_generate_stream
+from pydantic import BaseModel
+from typing import Optional
 import time
 import uuid
 import json
@@ -18,13 +22,35 @@ import os
 import shutil
 import asyncio
 
+from schemas.request import Query, NodeQuery
+from core.orchestrator import run_direct_mode, run_agent_mode, pipeline_lock
+from core.router import route_task_async
+from agents.coder import run_coder_async
+from agents.analyst import run_analyst_async
+from agents.critic import run_critic_async
+from agents.tool import run_tool_agent_async, execute_project_async, autofix_loop_async
+from services.event_emitter import emitter
+from core.memory import store_run, update_pattern, get_run_history, get_stats
+from core.session import create_session, get_session, add_turn, list_sessions, update_session
+from config import MODELS
+from services.ollama_client import async_generate_stream, check_ollama_health
+from services.vram_scheduler import (
+    sync_model_registry, get_scheduler_status,
+    ensure_model_loaded, release_model, scheduled_generate,
+    MODEL_REGISTRY, vram_state
+)
+
 WORKSPACE_DIR = os.path.join(os.path.dirname(__file__), "workspace")
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 # Global execution tracking for stop/cancel
 active_tasks = {}  # run_id -> asyncio.Task
 
-app = FastAPI()
+app = FastAPI(
+    title="AI Agent IDE",
+    description="VRAM-aware multi-agent inference pipeline",
+    version="3.1",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,9 +62,58 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"status": "AI Orchestrator Running", "version": "3.0 — Planning + Memory + Sandbox"}
+    return {"status": "AI Orchestrator Running", "version": "3.1 — Full Pipeline"}
 
-# ── WebSocket ──────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# STARTUP
+# ══════════════════════════════════════════════════════════════
+
+@app.on_event("startup")
+async def startup_sync_registry():
+    """Sync model registry from Ollama on server boot."""
+    await sync_model_registry()
+
+
+# ══════════════════════════════════════════════════════════════
+# HEALTH + STATUS
+# ══════════════════════════════════════════════════════════════
+
+@app.get("/health")
+async def health():
+    """Check Ollama connectivity, list models, and scheduler state."""
+    ollama_status = await check_ollama_health()
+    return {
+        "backend": "running",
+        "ollama": ollama_status["status"],
+        "models": ollama_status.get("models", []),
+        "configured": MODELS,
+        "scheduler": get_scheduler_status(),
+    }
+
+@app.get("/scheduler/status")
+def scheduler_status():
+    """Dedicated endpoint for real-time VRAM scheduler state."""
+    return get_scheduler_status()
+
+@app.post("/scheduler/sync")
+async def scheduler_sync():
+    """Force re-sync model registry from Ollama."""
+    registry = await sync_model_registry()
+    return {"synced": len(registry), "models": list(registry.keys())}
+
+@app.put("/config/models")
+def update_model_config(body: dict):
+    """Update the assigned model for a specific agent role."""
+    for key, val in body.items():
+        if key in MODELS:
+            MODELS[key] = val
+    return MODELS
+
+
+# ══════════════════════════════════════════════════════════════
+# WEBSOCKET — Real-time event stream
+# ══════════════════════════════════════════════════════════════
 
 @app.websocket("/ws/agent-stream")
 async def websocket_endpoint(websocket: WebSocket):
@@ -51,84 +126,77 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         emitter.disconnect(websocket)
 
-# ── Main Orchestrated Run ──────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# DUAL-MODE EXECUTION — The main entry points
+# ══════════════════════════════════════════════════════════════
+
+class RunRequest(BaseModel):
+    prompt: str
+    mode: str = "auto"  # "direct", "agent", or "auto"
+    session_id: Optional[str] = None
+    model: Optional[str] = None
+    allow_heavy: bool = False
+
 
 @app.post("/run")
-async def run(query: Query):
-    run_id = str(uuid.uuid4())
-    start_time = time.time()
+async def run(body: RunRequest):
+    """
+    Main execution endpoint with Dual-Mode support.
 
-    # 1. MANAGER
-    await emitter.emit(run_id, "manager", "start", input_str=query.prompt)
+    Modes:
+      - "direct": Skip pipeline, single model response (<2s)
+      - "agent":  Full orchestration pipeline (<15s)
+      - "auto":   Router decides based on task complexity
+    """
+    async with pipeline_lock:
+        # Create session if not provided
+        session_id = body.session_id
+        if not session_id:
+            session_id = create_session()
 
-    try:
-        decision = await route_task_async(query.prompt)
-        route = decision.get("selected_agent", "analyst")
-        confidence = decision.get("confidence", 1.0)
-    except Exception as e:
-        await emitter.emit(run_id, "manager", "error", error=str(e))
-        return {"error": str(e)}
+        mode = body.mode
 
-    latency_ms = int((time.time() - start_time) * 1000)
-    await emitter.emit(
-        run_id, "manager", "complete", input_str=query.prompt,
-        output_str=json.dumps(decision, indent=2),
-        metadata={"latency_ms": latency_ms, "tokens": len(query.prompt), "confidence": confidence}
-    )
+        # AUTO mode: let the router decide
+        if mode == "auto":
+            is_complex = any(kw in body.prompt.lower() for kw in [
+                "build", "create", "project", "implement", "system",
+                "multi", "full", "complete", "app", "application",
+                "write a", "develop", "architect"
+            ])
+            mode = "agent" if is_complex else "direct"
 
-    # 2. AGENT EXECUTION
-    agent_id = route
-    await emitter.emit(run_id, agent_id, "start", input_str=f"Execute task: {query.prompt}")
-
-    agent_start = time.time()
-    result = ""
-
-    try:
-        if route == "coder":
-            async for chunk in run_coder_async(query.prompt):
-                result += chunk
-                await emitter.emit(run_id, agent_id, "update", output_str=result)
-        elif route == "critic":
-            async for chunk in run_critic_async(query.prompt):
-                result += chunk
-                await emitter.emit(run_id, agent_id, "update", output_str=result)
+        if mode == "direct":
+            result = await run_direct_mode(
+                body.prompt,
+                session_id=session_id,
+                model_override=body.model,
+            )
         else:
-            async for chunk in run_analyst_async(query.prompt):
-                result += chunk
-                await emitter.emit(run_id, agent_id, "update", output_str=result)
+            result = await run_agent_mode(
+                body.prompt,
+                session_id=session_id,
+                allow_heavy=body.allow_heavy,
+            )
 
-        agent_latency = int((time.time() - agent_start) * 1000)
-        await emitter.emit(
-            run_id, agent_id, "complete", output_str=result,
-            metadata={"latency_ms": agent_latency, "tokens": len(result)}
-        )
+        return {
+            **result.model_dump(),
+            "session_id": session_id,
+            "mode": mode,
+        }
 
-        # 3. AUTO-TOOL: If coder produced code blocks or JSON format, auto-save to workspace
-        project_id = decision.get("project_id")
-        if agent_id == "coder" and ("```" in result or "def " in result or "---JSON---" in result):
-            tool_result = await run_tool_agent_async(run_id, result, project_id=project_id)
 
-            # 4. AUTO-EXECUTE: If files were created successfully, try running
-            if tool_result.get("status") == "success" and tool_result.get("project_id"):
-                pid = tool_result["project_id"]
-                exec_result = await autofix_loop_async(run_id, pid, max_retries=2)
-                total_latency = int((time.time() - start_time) * 1000)
-                store_run(run_id, query.prompt, route, result[:3000], pid,
-                         exec_result.get("status", "error"), total_latency)
-                update_pattern(query.prompt, route, exec_result.get("status") == "success")
-                return {"route": route, "result": result, "run_id": run_id,
-                        "project_id": pid, "execution": exec_result}
+# Legacy endpoint — backwards compatible
+@app.post("/run-legacy")
+async def run_legacy(query: Query):
+    """Legacy /run endpoint for backwards compatibility."""
+    body = RunRequest(prompt=query.prompt, mode="auto")
+    return await run(body)
 
-        total_latency = int((time.time() - start_time) * 1000)
-        store_run(run_id, query.prompt, route, result[:3000], None, "success", total_latency)
-        update_pattern(query.prompt, route, True)
-        return {"route": route, "result": result, "run_id": run_id}
 
-    except Exception as e:
-        await emitter.emit(run_id, agent_id, "error", error=str(e))
-        return {"error": str(e)}
-
-# ── Direct Agent Prompt ────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# DIRECT AGENT PROMPT (Node-level)
+# ══════════════════════════════════════════════════════════════
 
 @app.post("/run-node")
 async def run_node(query: NodeQuery):
@@ -169,7 +237,10 @@ async def run_node(query: NodeQuery):
         await emitter.emit(run_id, agent_id, "error", error=str(e))
         return {"error": str(e)}
 
-# ── Workspace API ──────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# WORKSPACE API
+# ══════════════════════════════════════════════════════════════
 
 @app.get("/workspace")
 def list_workspace():
@@ -185,7 +256,7 @@ def list_workspace():
             if os.path.exists(meta_path):
                 with open(meta_path, "r") as f:
                     meta = json.load(f)
-            
+
             files = []
             SKIP_DIRS = {'.venv', '__pycache__', '.git', 'node_modules', '.mypy_cache'}
             for root, dirs, filenames in os.walk(item_path):
@@ -193,14 +264,13 @@ def list_workspace():
                 for fn in filenames:
                     rel = os.path.relpath(os.path.join(root, fn), item_path)
                     files.append(rel)
-            
+
             projects.append({
                 "project_id": item,
                 "files": sorted(files),
                 "meta": meta
             })
         else:
-            # Loose file
             projects.append({
                 "project_id": "__root__",
                 "files": [item],
@@ -251,7 +321,10 @@ def delete_workspace_file(project_id: str, filename: str):
         return {"status": "deleted", "file": filename}
     return {"error": "File not found"}
 
-# ── Execution API ──────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# EXECUTION API
+# ══════════════════════════════════════════════════════════════
 
 @app.post("/execute/{project_id}")
 async def execute_project(project_id: str):
@@ -268,7 +341,10 @@ async def execute_with_autofix(project_id: str):
     result = await autofix_loop_async(run_id, project_id, max_retries=2)
     return {"run_id": run_id, **result}
 
-# ── Memory API ─────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# MEMORY API
+# ══════════════════════════════════════════════════════════════
 
 @app.get("/memory/history")
 def memory_history():
@@ -280,13 +356,39 @@ def memory_stats():
     """Get aggregate system intelligence stats."""
     return get_stats()
 
-# ── Agent Chat (Streaming) ─────────────────────────────────
 
-from fastapi.responses import StreamingResponse as SR
-from pydantic import BaseModel
+# ══════════════════════════════════════════════════════════════
+# SESSION API
+# ══════════════════════════════════════════════════════════════
+
+@app.post("/session")
+def create_new_session():
+    """Create a new conversation session."""
+    sid = create_session()
+    return {"session_id": sid}
+
+@app.get("/session/{session_id}")
+def get_session_endpoint(session_id: str):
+    """Get session state."""
+    session = get_session(session_id)
+    if not session:
+        return {"error": "Session not found"}
+    return session
+
+@app.get("/sessions")
+def list_all_sessions():
+    """List recent sessions."""
+    return {"sessions": list_sessions()}
+
+
+# ══════════════════════════════════════════════════════════════
+# AGENT CHAT (Streaming SSE)
+# ══════════════════════════════════════════════════════════════
 
 class ChatMessage(BaseModel):
     message: str
+    model: Optional[str] = None
+    session_id: Optional[str] = None
 
 @app.post("/agent/{agent_id}/chat")
 async def agent_chat(agent_id: str, body: ChatMessage):
@@ -302,17 +404,20 @@ async def agent_chat(agent_id: str, body: ChatMessage):
         return {"error": f"Unknown agent: {agent_id}"}
 
     model_key, system_instruction = agent_map[agent_id]
-    model = MODELS.get(model_key, "llama3:8b")
+    model = body.model or MODELS.get(model_key, "llama3:8b")
     full_prompt = f"{system_instruction}\n\nUser: {body.message}"
 
     async def stream_gen():
-        async for chunk in async_generate_stream(model, full_prompt):
+        async for chunk in scheduled_generate(model, full_prompt):
             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
 
-    return SR(stream_gen(), media_type="text/event-stream")
+    return StreamingResponse(stream_gen(), media_type="text/event-stream")
 
-# ── Stop / Cancel ──────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# STOP / CANCEL
+# ══════════════════════════════════════════════════════════════
 
 @app.post("/stop")
 async def stop_all():
@@ -323,132 +428,13 @@ async def stop_all():
             task.cancel()
             cancelled += 1
         del active_tasks[run_id]
-    
-    # Also emit stop event to canvas
-    await emitter.emit("system", "system", "error", error=f"Execution terminated by user ({cancelled} tasks cancelled)")
+
+    await emitter.emit("system", "system", "error",
+                      error=f"Execution terminated by user ({cancelled} tasks cancelled)")
     return {"status": "stopped", "cancelled": cancelled}
 
-# ── Voice Agent (100% Local) ───────────────────────────────
-import urllib.parse
-import subprocess
-import tempfile
-
-# Lazy-loaded whisper model
-_whisper_model = None
-VOICE_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "voice", "voice.onnx")
-
-def _get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        print("⚡ Loading Whisper tiny (CPU int8)...")
-        _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-    return _whisper_model
-
-@app.post("/api/voice-chat")
-async def voice_chat(audio: UploadFile = File(...), prompt: str = Form("You are a helpful voice assistant. Keep responses under 2 sentences.")):
-    from fastapi import HTTPException
-
-    # 1. Save browser audio blob
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
-        f.write(await audio.read())
-        input_path = f.name
-
-    # 2. Transcribe with Whisper (local, CPU)
-    try:
-        whisper = _get_whisper()
-        segments, _ = whisper.transcribe(input_path)
-        user_text = " ".join(s.text for s in segments).strip()
-        if not user_text:
-            user_text = "[No speech detected]"
-        print(f"🎤 Heard: {user_text}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription error: {e}")
-
-    # 3. Generate AI response (connect to your Ollama brain)
-    try:
-        from services.ollama_client import async_generate
-        agent_text = await async_generate(
-            MODELS.get("analyst", "phi3:mini"),
-            f"{prompt} User said: {user_text}"
-        )
-        if not agent_text or len(agent_text.strip()) < 2:
-            agent_text = f"You said: {user_text}"
-
-        print(f"🧠 Reply: {agent_text}")
-    except Exception:
-        agent_text = f"You said: {user_text}"
-
-    # 4. Text-to-Speech with Piper (local, ~50ms)
-    output_path = input_path.replace(".webm", ".wav")
-    try:
-        proc = subprocess.run(
-            f'echo {repr(agent_text)} | python3 -m piper --model "{VOICE_MODEL_PATH}" --output_file "{output_path}"',
-            shell=True, capture_output=True, text=True
-        )
-        if proc.returncode != 0:
-            raise Exception(proc.stderr)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TTS error: {e}")
-
-    # 5. Return audio + transcript headers
-    headers = {
-        "X-User-Transcript": urllib.parse.quote(user_text),
-        "X-Agent-Transcript": urllib.parse.quote(agent_text),
-        "Access-Control-Expose-Headers": "X-User-Transcript, X-Agent-Transcript"
-    }
-    return FileResponse(output_path, media_type="audio/wav", headers=headers)
 
 
-# ── Image Enhancement (100% Local with Pillow) ────────────
 
-@app.post("/api/restore-image")
-async def restore_image(image: UploadFile = File(...), prompt: str = Form(...)):
-    """Local image enhancement using Pillow filters."""
-    from fastapi import HTTPException
-    from PIL import Image, ImageFilter, ImageEnhance
-    import io
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_in:
-        content = await image.read()
-        temp_in.write(content)
-        input_path = temp_in.name
-
-    output_path = input_path.replace(".png", "_restored.png")
-    prompt_lower = prompt.lower()
-
-    try:
-        img = Image.open(input_path)
-
-        # Apply filters based on prompt keywords
-        if "deblur" in prompt_lower or "sharp" in prompt_lower:
-            img = img.filter(ImageFilter.SHARPEN)
-            img = ImageEnhance.Sharpness(img).enhance(2.0)
-            img = ImageEnhance.Contrast(img).enhance(1.2)
-        elif "denoise" in prompt_lower or "noise" in prompt_lower:
-            img = img.filter(ImageFilter.SMOOTH_MORE)
-            img = img.filter(ImageFilter.SMOOTH)
-        elif "dehaze" in prompt_lower or "haze" in prompt_lower:
-            img = ImageEnhance.Contrast(img).enhance(1.5)
-            img = ImageEnhance.Color(img).enhance(1.3)
-        elif "low-light" in prompt_lower or "bright" in prompt_lower or "dark" in prompt_lower:
-            img = ImageEnhance.Brightness(img).enhance(1.6)
-            img = ImageEnhance.Contrast(img).enhance(1.3)
-            img = ImageEnhance.Color(img).enhance(1.1)
-        else:
-            # General enhance
-            img = img.filter(ImageFilter.SHARPEN)
-            img = ImageEnhance.Contrast(img).enhance(1.2)
-            img = ImageEnhance.Color(img).enhance(1.1)
-
-        img.save(output_path, quality=95)
-        print(f"✅ Image processed: {prompt}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Image processing error: {e}")
-
-    if not os.path.exists(output_path):
-        raise HTTPException(status_code=500, detail="Processing finished but no output file was generated.")
-
-    return FileResponse(output_path, media_type="image/png")
 
 

@@ -3,7 +3,7 @@ import { useAgentStore } from '../store/useAgentStore';
 import { X, Cpu, FileCode2, Clock, CheckCircle, Activity, FileWarning, Play } from 'lucide-react';
 
 export default function NodeInspectorPanel() {
-  const { selectedNodeId, nodesState, setSelectedNode } = useAgentStore();
+  const { selectedNodeId, nodesState, setSelectedNode, availableModels, configuredModels } = useAgentStore();
   
   if (!selectedNodeId || selectedNodeId === 'input') return null;
 
@@ -24,6 +24,49 @@ export default function NodeInspectorPanel() {
       </div>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
+        
+        {/* Engine Configuration (If applicable) */}
+        {configuredModels[selectedNodeId] && (
+          <div className="space-y-2">
+            <h3 className="text-gray-500 text-[10px] uppercase tracking-wider flex items-center justify-between">
+              Live Engine Configuration
+            </h3>
+            <div className="bg-[#050505] p-2.5 rounded border border-white/5 flex items-center gap-2">
+              <Cpu className="w-3.5 h-3.5 text-cyan-500 shrink-0" />
+              <select
+                value={configuredModels[selectedNodeId]}
+                onChange={async (e) => {
+                  const newModel = e.target.value;
+                  try {
+                    await fetch('http://127.0.0.1:8888/config/models', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ [selectedNodeId]: newModel })
+                    });
+                    // Refresh configured models immediately
+                    useAgentStore.getState().setConfiguredModels({
+                      ...configuredModels,
+                      [selectedNodeId]: newModel
+                    });
+                  } catch (err) {
+                    console.error("Failed to swap engine", err);
+                  }
+                }}
+                className="w-full bg-transparent text-[11px] text-cyan-100 font-semibold border-none outline-none cursor-pointer appearance-none truncate"
+              >
+                {availableModels.map(m => (
+                  <option key={m} value={m} className="bg-[#111] text-gray-200">
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[9px] text-gray-600 font-mono tracking-tighter mt-1">
+              Changes apply instantly to the {selectedNodeId} agent logic.
+            </p>
+          </div>
+        )}
+
         {/* Status */}
         <div className="space-y-2">
             <h3 className="text-gray-500 text-[10px] uppercase tracking-wider">Current State</h3>

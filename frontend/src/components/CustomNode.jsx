@@ -37,7 +37,21 @@ export default function CustomNode({ id, data }) {
   };
 
   return (
-    <div className={`p-4 rounded-xl border-2 w-72 transition-all duration-300 relative group overflow-hidden ${statusColors[currentStatus]}`}>
+    <div className={`p-4 rounded-xl border-2 w-72 transition-all duration-300 relative group ${isManager ? 'hover:scale-105 hover:shadow-[0_0_40px_rgba(0,240,255,0.4)] z-50' : ''} ${statusColors[currentStatus]}`}>
+      
+      {/* Dynamic AI Core Effect for Manager Node */}
+      {isManager && (
+         <div className="absolute inset-0 pointer-events-none -z-10 overflow-visible flex items-center justify-center">
+            {/* Pulsing Core Glow */}
+            <div className={`absolute w-full h-full rounded-xl transition-all duration-700 ${currentStatus === 'running' ? 'bg-cyan-500/20 blur-xl animate-pulse scale-125' : currentStatus === 'error' ? 'bg-red-500/20 blur-xl animate-pulse scale-110' : 'bg-cyan-500/5 blur-lg scale-100'}`} />
+            
+            {/* Orbiting Ring 1 */}
+            <div className={`absolute w-[140%] h-[140%] rounded-full border border-white/5 border-t-cyan-400/30 border-b-purple-400/30 animate-[spin_10s_linear_infinite] ${currentStatus === 'running' ? 'opacity-100 animate-[spin_3s_linear_infinite]' : 'opacity-30'}`} />
+            
+            {/* Orbiting Ring 2 (Counter Spin) */}
+            <div className={`absolute w-[160%] h-[160%] rounded-full border border-white/5 border-l-cyan-400/20 border-r-pink-400/20 animate-[spin_15s_linear_infinite_reverse] ${currentStatus === 'running' ? 'opacity-100 animate-[spin_4s_linear_infinite_reverse]' : 'opacity-20'}`} />
+         </div>
+      )}
       
       {/* Input Handle */}
       {label !== 'User Request' && <Handle type="target" position={Position.Left} className="w-2.5 h-6 rounded-sm bg-gray-500 border-none -ml-1 transition-all group-hover:bg-cyan-400 opacity-60 hover:opacity-100" />}

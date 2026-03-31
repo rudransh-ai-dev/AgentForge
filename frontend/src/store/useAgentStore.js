@@ -12,6 +12,10 @@ export const useAgentStore = create((set, get) => ({
   executionLog: [],
   activeRunId: null,
   selectedNodeId: null,
+  availableModels: [],
+  configuredModels: {},
+  setAvailableModels: (models) => set({ availableModels: models }),
+  setConfiguredModels: (models) => set({ configuredModels: models }),
 
   // Workspace
   projects: [],

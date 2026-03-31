@@ -3,7 +3,11 @@ import { ErrorBoundary } from 'react-error-boundary'
 import Dashboard from './Dashboard'
 import './index.css'
 
+import LandingPage from './LandingPage'
+
 function App() {
+  const [hasEntered, setHasEntered] = React.useState(false);
+
   return (
     <ErrorBoundary fallbackRender={({ error }) => (
       <div style={{ padding: '20px', color: 'red', backgroundColor: '#fff', fontSize: '20px' }}>
@@ -11,7 +15,11 @@ function App() {
         <pre>{error.message}</pre>
       </div>
     )}>
-      <Dashboard />
+      {hasEntered ? (
+        <Dashboard />
+      ) : (
+        <LandingPage onEnter={() => setHasEntered(true)} />
+      )}
     </ErrorBoundary>
   )
 }

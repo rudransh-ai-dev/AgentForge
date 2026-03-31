@@ -30,10 +30,32 @@ class RouteDecision(BaseModel):
     model_config = ConfigDict(extra='ignore')
 
 
+TASK_ROUTER = {
+    "code_generation": "coder",
+    "debug_basic": "coder",
+    "debug_complex": "heavy",
+    "explanation": "analyst",
+    "analysis": "analyst",
+    "review": "critic",
+    "data_task": "data"
+}
+
+def should_use_heavy(task_type: str, retries: int, confidence: float) -> bool:
+    return (
+        retries >= 2 or
+        confidence < 0.5 or
+        task_type == "debug_complex"
+    )
+
+def resolve_agent(task_type: str, confidence: float, retries: int = 0) -> str:
+    base_agent = TASK_ROUTER.get(task_type, "analyst")
+    if should_use_heavy(task_type, retries, confidence):
+        return "heavy"
+    return base_agent
+
 async def plan_task_async(prompt: str) -> dict:
     """
-    Planning Agent: Generates a multi-step execution plan for complex tasks.
-    For simple tasks, returns a single-step plan.
+    Planning Agent: Generates a multi-step execution plan and assigns task properties.
     """
     plan_prompt = f"""You are an AI System Planner. Analyze the task and create an execution plan.
 
@@ -52,6 +74,8 @@ Respond with ONLY a JSON object:
   "goal": "one-line summary of what we're building",
   "project_id": "short_snake_case_name",
   "complexity": "simple" or "complex",
+  "task_type": "code_generation", "debug_basic", "debug_complex", "explanation", "analysis", "review", or "data_task",
+  "confidence": 0.95,
   "steps": [
     {{"step": 1, "action": "code", "description": "what this step does", "agent": "coder"}},
     {{"step": 2, "action": "save_files", "description": "save to workspace", "agent": "tool"}},
@@ -61,7 +85,11 @@ Respond with ONLY a JSON object:
 
 Task: {prompt}
 """
-    response_text = await async_generate(MODELS["manager"], plan_prompt)
+    # Extract manager model name
+    mgr_cfg = MODELS.get("manager", {"name": "phi3:mini"})
+    mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
+    
+    response_text = await async_generate(mgr_model, plan_prompt)
 
     try:
         # Sanitize and extract JSON reliably
@@ -89,12 +117,15 @@ Task: {prompt}
             "goal": parsed.get("goal", prompt[:80]),
             "project_id": parsed.get("project_id", "project"),
             "complexity": parsed.get("complexity", "simple"),
+            "task_type": parsed.get("task_type", "analysis"),
+            "confidence": float(parsed.get("confidence", 0.9)),
             "steps": steps
         }
     except Exception as e:
         # Fallback: single-step simple plan
         is_code = any(kw in prompt.lower() for kw in ["code", "write", "build", "create", "script", "program", "app", "function"])
-        agent = "coder" if is_code else "analyst"
+        task_type = "code_generation" if is_code else "explanation"
+        agent = resolve_agent(task_type, 0.9)
 
         steps = [{"step": 1, "action": "code" if is_code else "analyze", "description": prompt[:100], "agent": agent}]
         if is_code:
@@ -105,6 +136,8 @@ Task: {prompt}
             "goal": prompt[:80],
             "project_id": "project",
             "complexity": "simple",
+            "task_type": task_type,
+            "confidence": 0.9,
             "steps": steps
         }
 
@@ -117,17 +150,15 @@ async def route_task_async(prompt: str) -> dict:
     # First, generate a plan
     plan = await plan_task_async(prompt)
 
-    # The first agent in the plan is the route target
-    first_step = plan["steps"][0] if plan["steps"] else None
-    agent = first_step["agent"] if first_step else "analyst"
-
-    if agent not in ["coder", "analyst", "critic"]:
-        agent = "analyst"
+    # The first agent in the plan tells us what the primary task is, but we use strict mapping logic
+    task_type = plan.get("task_type", "analysis")
+    confidence = plan.get("confidence", 0.9)
+    agent = resolve_agent(task_type, confidence)
 
     decision = RouteDecision(
         selected_agent=agent,
-        reason=f"Plan: {plan['goal']} ({len(plan['steps'])} steps, {plan['complexity']})",
-        confidence=0.9 if plan["complexity"] == "simple" else 0.85,
+        reason=f"Plan: {plan['goal']} ({len(plan['steps'])} steps). Mapped '{task_type}' to '{agent}' (Conf: {confidence})",
+        confidence=confidence,
         plan=plan["steps"]
     )
 

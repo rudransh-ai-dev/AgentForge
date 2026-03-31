@@ -8,16 +8,16 @@ import NodeInspectorPanel from './NodeInspectorPanel';
 const nodeTypes = { custom: CustomNode };
 
 export default function AgentCanvas() {
-  const { nodesState, updateNode, addTimelineEvent, selectedNodeId } = useAgentStore();
+  const { nodesState, updateNode, addTimelineEvent, selectedNodeId, configuredModels } = useAgentStore();
 
   const [nodes, setNodes, onNodesChange] = useNodesState([
     { id: 'input', data: { label: 'User Request', stateData: { status: 'idle', output: 'Awaiting prompt...' } }, type: 'custom', position: { x: 50, y: 150 } },
     { id: 'manager', data: { label: 'Manager AI' }, type: 'custom', position: { x: 450, y: 150 } },
-    { id: 'coder', data: { label: 'DeepSeek Coder' }, type: 'custom', position: { x: 900, y: -20 } },
-    { id: 'analyst', data: { label: 'Phi Analyst' }, type: 'custom', position: { x: 900, y: 350 } },
-    { id: 'critic', data: { label: 'Llama3 Critic' }, type: 'custom', position: { x: 900, y: 720 } },
-    { id: 'tool', data: { label: 'Tool Agent' }, type: 'custom', position: { x: 1350, y: -20 } },
-    { id: 'executor', data: { label: 'Executor' }, type: 'custom', position: { x: 1350, y: 350 } }
+    { id: 'coder', data: { label: 'Coder' }, type: 'custom', position: { x: 900, y: -20 } },
+    { id: 'analyst', data: { label: 'Analyst' }, type: 'custom', position: { x: 900, y: 350 } },
+    { id: 'critic', data: { label: 'Critic' }, type: 'custom', position: { x: 900, y: 720 } },
+    { id: 'tool', data: { label: 'Tool Agent (FS)' }, type: 'custom', position: { x: 1350, y: -20 } },
+    { id: 'executor', data: { label: 'Executor (Sandbox)' }, type: 'custom', position: { x: 1350, y: 350 } }
   ]);
 
   const [edges, setEdges, onEdgesChange] = useEdgesState([
@@ -41,8 +41,14 @@ export default function AgentCanvas() {
     } catch(e) {}
 
     setNodes((nds) => nds.map((n) => {
-       if(nodesState[n.id]) return { ...n, data: { ...n.data, stateData: nodesState[n.id] } };
-       return n;
+       const baseLabel = n.id === 'manager' ? 'Manager AI' :
+                         n.id === 'coder' ? 'Coder' :
+                         n.id === 'analyst' ? 'Analyst' :
+                         n.id === 'critic' ? 'Critic' : n.data.label;
+       const label = configuredModels && configuredModels[n.id] ? `${baseLabel} (${configuredModels[n.id]})` : baseLabel;
+
+       if(nodesState[n.id]) return { ...n, data: { ...n.data, label, stateData: nodesState[n.id] } };
+       return { ...n, data: { ...n.data, label } };
     }));
 
     setEdges((eds) => eds.map((e) => {
@@ -104,7 +110,7 @@ export default function AgentCanvas() {
         
         return e;
     }));
-  }, [nodesState, setNodes, setEdges]);
+  }, [nodesState, setNodes, setEdges, configuredModels]);
 
   // WebSocket global listener specifically for Timeline + Zustand state injection
   useEffect(() => {
