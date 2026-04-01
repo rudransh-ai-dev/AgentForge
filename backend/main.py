@@ -83,11 +83,16 @@ async def startup_sync_registry():
 async def health():
     """Check Ollama connectivity, list models, and scheduler state."""
     ollama_status = await check_ollama_health()
+    # Flatten the rich MODELS config to plain {role: model_name} strings for the frontend
+    configured_flat = {
+        k: (v["name"] if isinstance(v, dict) else v)
+        for k, v in MODELS.items()
+    }
     return {
         "backend": "running",
         "ollama": ollama_status["status"],
         "models": ollama_status.get("models", []),
-        "configured": MODELS,
+        "configured": configured_flat,
         "scheduler": get_scheduler_status(),
     }
 
@@ -398,6 +403,7 @@ async def agent_chat(agent_id: str, body: ChatMessage):
         "coder": ("coder", "You are an expert software engineer. Write clean, production-ready code."),
         "analyst": ("analyst", "You are a senior analyst. Provide clear explanations and reasoning."),
         "critic": ("critic", "You are an expert reviewer and critic. Evaluate critically and honestly."),
+        "qa": ("qa", "You are a direct, helpful Q&A assistant. Provide definitive, concise answers to the user's questions."),
     }
 
     if agent_id not in agent_map:

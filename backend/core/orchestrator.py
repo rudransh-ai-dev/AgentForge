@@ -75,7 +75,8 @@ def _get_agent_model(agent: str, allow_heavy: bool = False, budget_ms: int = 150
     """
     Get the appropriate model for an agent, respecting budget constraints.
     """
-    model = MODELS.get(agent, "llama3:8b")
+    agent_cfg = MODELS.get(agent, {"name": "llama3:8b"})
+    model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
 
     if not allow_heavy:
         info = get_model_info(model)

@@ -29,8 +29,11 @@ export default function AgentChat() {
   useEffect(() => {
     fetch(`${API}/health`).then(res => res.json()).then(data => {
       setAvailableModels(data.models || []);
-      // Set initial model for manager
-      if (data.configured?.manager) setActiveModel(data.configured.manager);
+      // Safely extract the model name (guard against objects from rich config)
+      if (data.configured?.manager) {
+        const mgr = data.configured.manager;
+        setActiveModel(typeof mgr === 'string' ? mgr : mgr?.name || 'phi3:mini');
+      }
     }).catch(console.error);
   }, []);
 
@@ -344,30 +347,30 @@ export default function AgentChat() {
                     >
                       <div className="p-3 border-b border-white/[0.05] bg-white/[0.02]">
                         <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-                           Select Engine for {selectedAgent.label}
+                          Select Engine for {selectedAgent.label}
                         </span>
                       </div>
-                      
+
                       <div className="p-1.5 max-h-[320px] overflow-y-auto custom-scrollbar">
                         {/* 1. AGENTS Switcher */}
                         <div className="mb-2 pb-2 border-b border-white/[0.05]">
-                           {AGENTS.map(agent => (
-                             <button
-                                key={agent.id}
-                                onClick={() => {
-                                   setSelectedAgent(agent);
-                                   // Try to find a good default model if switching
-                                   inputRef.current?.focus();
-                                }}
-                                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left group ${selectedAgent.id === agent.id ? 'bg-white/[0.06] text-white' : 'text-gray-500 hover:bg-white/[0.03]'}`}
-                             >
-                                <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `${agent.color}15`, border: `1px solid ${agent.color}25` }}>
-                                   {React.createElement(agent.icon, { className: "w-3 h-3", style: { color: agent.color } })}
-                                </div>
-                                <span className="text-[12px] font-medium">{agent.label}</span>
-                                {selectedAgent.id === agent.id && <div className="ml-auto w-1 h-1 rounded-full bg-cyan-400" />}
-                             </button>
-                           ))}
+                          {AGENTS.map(agent => (
+                            <button
+                              key={agent.id}
+                              onClick={() => {
+                                setSelectedAgent(agent);
+                                // Try to find a good default model if switching
+                                inputRef.current?.focus();
+                              }}
+                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left group ${selectedAgent.id === agent.id ? 'bg-white/[0.06] text-white' : 'text-gray-500 hover:bg-white/[0.03]'}`}
+                            >
+                              <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `${agent.color}15`, border: `1px solid ${agent.color}25` }}>
+                                {React.createElement(agent.icon, { className: "w-3 h-3", style: { color: agent.color } })}
+                              </div>
+                              <span className="text-[12px] font-medium">{agent.label}</span>
+                              {selectedAgent.id === agent.id && <div className="ml-auto w-1 h-1 rounded-full bg-cyan-400" />}
+                            </button>
+                          ))}
                         </div>
 
                         {/* 2. MODELS Switcher (All 7) */}
@@ -381,11 +384,10 @@ export default function AgentChat() {
                                 setShowModelPicker(false);
                                 inputRef.current?.focus();
                               }}
-                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left group ${
-                                isSelected
+                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left group ${isSelected
                                   ? 'bg-cyan-500/10 border border-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.1)]'
                                   : 'hover:bg-white/[0.04] border border-transparent'
-                              }`}
+                                }`}
                             >
                               <div
                                 className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border transition-colors ${isSelected ? 'bg-cyan-500/20 border-cyan-500/30' : 'bg-white/[0.03] border-white/[0.05] group-hover:border-white/10'}`}

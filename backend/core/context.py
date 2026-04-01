@@ -49,7 +49,9 @@ CONVERSATION:
 SUMMARY:"""
 
     try:
-        result = await scheduled_generate_sync(MODELS["manager"], prompt)
+        mgr_cfg = MODELS["manager"]
+        mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
+        result = await scheduled_generate_sync(mgr_model, prompt)
         cleaned = strip_prompt_leakage(result)
         return cleaned[:max_summary_length].strip()
     except Exception:

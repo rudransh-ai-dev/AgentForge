@@ -193,7 +193,9 @@ BROKEN TEXT:
 {broken_text}
 """
     try:
-        response = await async_generate(MODELS.get("critic", "llama3"), prompt)
+        critic_cfg = MODELS.get("critic", {"name": "llama3:8b"})
+        critic_model = critic_cfg["name"] if isinstance(critic_cfg, dict) else critic_cfg
+        response = await async_generate(critic_model, prompt)
         cleaned = strip_prompt_leakage(response)
         
         # Try object

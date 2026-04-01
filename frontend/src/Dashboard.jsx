@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Terminal, Activity, Search, Cpu, Zap, BrainCircuit, Network,
-  Play, StopCircle, FolderTree, Clock, HardDrive, Wifi, MessageSquare,
+  Play, StopCircle, FolderTree, Clock, HardDrive, Wifi, MessageSquare, MessageCircle,
   LayoutDashboard, ChevronRight, Square, Radio, ChevronLeft, WifiOff,
   AlertTriangle, CheckCircle2, Loader2, PanelLeftClose, PanelLeft
 } from 'lucide-react';
 import AgentCanvas from './components/AgentCanvas';
 import WorkspaceExplorer from './components/WorkspaceExplorer';
 import AgentChat from './components/AgentChat';
+import SimpleChat from './components/SimpleChat';
 import { useAgentStore } from './store/useAgentStore';
 
 const API = "http://127.0.0.1:8888";
@@ -209,12 +210,13 @@ export default function Dashboard() {
   const handleStop = async () => {
     try {
       await fetch(`${API}/stop`, { method: "POST" });
-      useAgentStore.getState().resetAll();
+      // Removed resetAll() so logs stay visible after stopping
     } catch (e) { }
   };
 
   const TABS = useMemo(() => [
     { id: 'chat', icon: <MessageSquare className="w-[18px] h-[18px]" />, label: 'Agent Chat' },
+    { id: 'simple-chat', icon: <MessageCircle className="w-[18px] h-[18px]" />, label: 'Chat' },
     { id: 'canvas', icon: <Network className="w-[18px] h-[18px]" />, label: 'Canvas' },
     { id: 'workspace', icon: <FolderTree className="w-[18px] h-[18px]" />, label: 'Files', badge: projects.length || null },
   ], [projects.length]);
@@ -412,7 +414,14 @@ export default function Dashboard() {
               <span className="text-green-400">{sysStats.success_rate}%</span>
             </div>
 
-            {/* Stop button */}
+            <button
+               onClick={() => useAgentStore.getState().resetAll()}
+               className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.06] rounded-lg text-gray-400 hover:text-white text-[11px] font-bold transition-all"
+            >
+               Clear Logs
+            </button>
+
+            {/* Stop button */ }
             {isSystemActive ? (
               <button
                 onClick={handleStop}
@@ -442,6 +451,19 @@ export default function Dashboard() {
                 className="flex-1 flex"
               >
                 <AgentChat />
+              </motion.div>
+            )}
+            {activeTab === 'simple-chat' && (
+              <motion.div
+                key="simple-chat"
+                variants={pageVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={pageTransition}
+                className="flex-1 flex"
+              >
+                <SimpleChat />
               </motion.div>
             )}
             {activeTab === 'canvas' && (
@@ -481,26 +503,8 @@ export default function Dashboard() {
 // ── Timeline Panel (Canvas tab only) ──
 
 function TimelinePanel({ executionLog }) {
-  const StreamText = React.memo(({ text }) => {
-     const [display, setDisplay] = useState('');
-     useEffect(() => {
-        let i = 0;
-        const speed = 15;
-        const intv = setInterval(() => {
-            setDisplay(text.substring(0, i));
-            i++;
-            if(i > text.length) clearInterval(intv);
-        }, speed);
-        return () => clearInterval(intv);
-     }, [text]);
-     
-     return (
-        <span className="whitespace-pre-wrap break-words truncate">
-           {display}
-           {display.length < text.length && <span className="inline-block w-1 h-3 bg-cyan-400 animate-pulse ml-0.5" />}
-        </span>
-     );
-  });
+  // Only show start, complete, and error events to reduce noise
+  const filteredLog = executionLog.filter(log => log.type !== 'update');
 
   return (
     <div className="w-[380px] flex flex-col gap-4 shrink-0">
@@ -512,7 +516,7 @@ function TimelinePanel({ executionLog }) {
         </div>
         <div className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-[10px] custom-scrollbar flex flex-col-reverse">
           <AnimatePresence>
-            {[...executionLog].reverse().map((log) => (
+            {[...filteredLog].reverse().map((log) => (
               <motion.div
                 key={log.event_id}
                 initial={{ opacity: 0, x: -10, scale: 0.95 }}
@@ -531,10 +535,13 @@ function TimelinePanel({ executionLog }) {
                 </div>
                 <div className="text-gray-300 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar pr-1">
                     {log.type === 'start' && <div className="text-amber-200 opacity-60 mb-1">▶ EXEC_TARGET: {log.node_id}</div>}
-                    <StreamText text={log.output ? String(log.output).slice(0, 300) : String(log.input).slice(0, 300)} />
+                    <span className="whitespace-pre-wrap break-words">
+                      {log.output ? String(log.output).slice(0, 500) : String(log.input).slice(0, 500)}
+                    </span>
                 </div>
               </motion.div>
             )).slice(0, 50)}
+
           </AnimatePresence>
         </div>
       </div>

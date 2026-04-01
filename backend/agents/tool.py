@@ -28,7 +28,7 @@ Output a SINGLE valid JSON object with this exact schema:
   "language": "python",
   "dependencies": ["list", "of", "external_imports_only"],
   "files": [
-    {{"path": "filename.py", "content": "full file content here"}}
+    {{"name": "filename.py", "content": "full file content here"}}
   ]
 }}
 
@@ -74,7 +74,9 @@ Input to process:
             
     # AI PARSER: Fallback or if ---JSON--- isn't used
     if not result_json:
-        async for chunk in async_generate_stream(MODELS.get("manager", "llama3:8b"), system_prompt):
+        mgr_cfg = MODELS.get("manager", {"name": "llama3:8b"})
+        mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
+        async for chunk in async_generate_stream(mgr_model, system_prompt):
             result_json += chunk
             # Throttle UI updates
             if len(result_json) % 40 == 0:
@@ -100,9 +102,31 @@ Input to process:
         files = project_data.get("files", [])
         created_files = []
         for file_obj in files:
-            path = file_obj.get("path")
+            # Accept both "path" and "name" — Coder uses "name", Tool prompt says "path"
+            path = file_obj.get("path") or file_obj.get("name")
             content = file_obj.get("content")
             if path and content is not None:
+                # Sanitize: strip markdown wrappers and LLM commentary
+                from services.sanitizer import sanitize_file_content
+                content = sanitize_file_content(content)
+
+                # Validate Python files have actual code, not English text
+                if path.endswith(".py") and content.strip():
+                    try:
+                        compile(content, path, "exec")
+                    except SyntaxError:
+                        await emitter.emit(run_id, node_id, "update",
+                                          output_str=f"⚠️ Syntax error in '{path}', attempting cleanup...")
+                        # Try stripping common LLM preamble lines
+                        lines = content.split("\n")
+                        code_lines = [l for l in lines if not l.strip().startswith(("Based on", "Here is", "Here's", "This script", "This Python"))]
+                        content = "\n".join(code_lines)
+                        try:
+                            compile(content, path, "exec")
+                        except SyntaxError:
+                            await emitter.emit(run_id, node_id, "update",
+                                              output_str=f"⚠️ '{path}' still has syntax errors — saving as-is for auto-fix")
+
                 full_path = os.path.join(project_dir, path)
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
                 with open(full_path, "w") as f:
@@ -165,10 +189,13 @@ async def execute_project_async(run_id: str, project_id: str):
                 "python3", "-m", "venv", venv_dir,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            await asyncio.wait_for(proc.communicate(), timeout=30)
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode != 0:
+                await emitter.emit(run_id, node_id, "update", output_str=f"⚠️ venv failed, using system python. ({err.decode().strip()[:50]})")
+                import shutil
+                shutil.rmtree(venv_dir, ignore_errors=True)
         except Exception as e:
-            await emitter.emit(run_id, node_id, "update", output_str=f"⚠️ venv creation failed, using system python: {e}")
-            python_bin = "python3"
+            await emitter.emit(run_id, node_id, "update", output_str=f"⚠️ venv crash, using system python: {e}")
 
     # ── Step 2: Install dependencies ──
     STDLIB = {"os", "sys", "json", "re", "math", "time", "datetime", "collections",
@@ -179,9 +206,12 @@ async def execute_project_async(run_id: str, project_id: str):
               "contextlib", "operator", "struct", "array", "heapq", "bisect"}
 
     external_deps = [d for d in deps if d.lower().split(".")[0] not in STDLIB]
-    pip_bin = os.path.join(venv_dir, "bin", "pip") if os.path.exists(venv_dir) else "pip"
+    
+    # Intelligently fallback to system pip3 if venv pip doesn't exist
+    pip_path = os.path.join(venv_dir, "bin", "pip")
+    pip_bin = pip_path if os.path.exists(pip_path) else "pip3"
 
-    if external_deps and os.path.exists(pip_bin):
+    if external_deps:
         await emitter.emit(run_id, node_id, "update", output_str=f"📦 Installing: {', '.join(external_deps)}...")
         try:
             proc = await asyncio.create_subprocess_exec(

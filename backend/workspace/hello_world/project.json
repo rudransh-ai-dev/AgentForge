@@ -1,7 +1,0 @@
-{
-  "project_id": "hello_world",
-  "entry_point": "main.py",
-  "language": "python",
-  "dependencies": [],
-  "files": []
-}
