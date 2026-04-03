@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAgentStore } from '../store/useAgentStore';
 import {
   FolderOpen, File, RefreshCw, X, Play, Trash2, Save,
@@ -122,14 +123,22 @@ export default function WorkspaceExplorer() {
   return (
     <div className="flex-1 h-full flex font-mono">
       {/* FILE TREE PANEL */}
-      <div className="w-72 h-full flex flex-col glass-panel border-r border-white/5 bg-black/40 overflow-hidden">
+      <div className="w-72 h-full flex flex-col glass-panel border-r border-white/5 bg-black/40 overflow-hidden relative">
+        {/* Top accent */}
+        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-purple-400/50 to-transparent" />
+        
         <div className="p-4 border-b border-white/10 flex items-center justify-between text-xs tracking-widest text-gray-500 uppercase font-bold bg-white/[0.02]">
           <div className="flex items-center gap-2">
             <FolderOpen className="w-4 h-4 text-cyan-400" /> Workspace
           </div>
-          <button onClick={fetchProjects} className="hover:text-cyan-400 transition-colors">
+          <motion.button 
+            whileHover={{ rotate: 180 }}
+            transition={{ duration: 0.3 }}
+            onClick={fetchProjects} 
+            className="hover:text-cyan-400 transition-colors"
+          >
             <RefreshCw className="w-3.5 h-3.5" />
-          </button>
+          </motion.button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
@@ -138,8 +147,13 @@ export default function WorkspaceExplorer() {
               Workspace empty.<br/>Ask the Coder to generate a project.
             </div>
           ) : (
-            projects.map(proj => (
-              <div key={proj.project_id}>
+            projects.map((proj, idx) => (
+              <motion.div 
+                key={proj.project_id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: idx * 0.05 }}
+              >
                 {/* Project Header */}
                 <div
                   onClick={() => toggleProject(proj.project_id)}
@@ -216,7 +230,7 @@ export default function WorkspaceExplorer() {
                     )}
                   </div>
                 )}
-              </div>
+              </motion.div>
             ))
           )}
         </div>

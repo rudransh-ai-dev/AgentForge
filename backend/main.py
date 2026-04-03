@@ -10,6 +10,7 @@ Execution Modes:
 
 All models are VRAM-scheduled through the global pipeline lock.
 """
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,15 +30,38 @@ from agents.coder import run_coder_async
 from agents.analyst import run_analyst_async
 from agents.critic import run_critic_async
 from agents.tool import run_tool_agent_async, execute_project_async, autofix_loop_async
+from agents.reader import run_reader_async
 from services.event_emitter import emitter
 from core.memory import store_run, update_pattern, get_run_history, get_stats
-from core.session import create_session, get_session, add_turn, list_sessions, update_session
+from core.session import (
+    create_session,
+    get_session,
+    add_turn,
+    list_sessions,
+    update_session,
+)
 from config import MODELS
 from services.ollama_client import async_generate_stream, check_ollama_health
 from services.vram_scheduler import (
-    sync_model_registry, get_scheduler_status,
-    ensure_model_loaded, release_model, scheduled_generate,
-    MODEL_REGISTRY, vram_state
+    sync_model_registry,
+    get_scheduler_status,
+    ensure_model_loaded,
+    release_model,
+    scheduled_generate,
+    MODEL_REGISTRY,
+    vram_state,
+)
+from core.prompts import (
+    manager_chat_prompt,
+    coder_chat_prompt,
+    analyst_chat_prompt,
+    critic_chat_prompt,
+    reader_chat_prompt,
+    qa_chat_prompt,
+    manager_prompt,
+    coder_prompt,
+    analyst_prompt,
+    critic_prompt,
 )
 
 WORKSPACE_DIR = os.path.join(os.path.dirname(__file__), "workspace")
@@ -60,6 +84,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def root():
     return {"status": "AI Orchestrator Running", "version": "3.1 — Full Pipeline"}
@@ -68,6 +93,7 @@ def root():
 # ══════════════════════════════════════════════════════════════
 # STARTUP
 # ══════════════════════════════════════════════════════════════
+
 
 @app.on_event("startup")
 async def startup_sync_registry():
@@ -79,14 +105,13 @@ async def startup_sync_registry():
 # HEALTH + STATUS
 # ══════════════════════════════════════════════════════════════
 
+
 @app.get("/health")
 async def health():
     """Check Ollama connectivity, list models, and scheduler state."""
     ollama_status = await check_ollama_health()
-    # Flatten the rich MODELS config to plain {role: model_name} strings for the frontend
     configured_flat = {
-        k: (v["name"] if isinstance(v, dict) else v)
-        for k, v in MODELS.items()
+        k: (v["name"] if isinstance(v, dict) else v) for k, v in MODELS.items()
     }
     return {
         "backend": "running",
@@ -96,16 +121,42 @@ async def health():
         "scheduler": get_scheduler_status(),
     }
 
+
 @app.get("/scheduler/status")
 def scheduler_status():
     """Dedicated endpoint for real-time VRAM scheduler state."""
     return get_scheduler_status()
+
 
 @app.post("/scheduler/sync")
 async def scheduler_sync():
     """Force re-sync model registry from Ollama."""
     registry = await sync_model_registry()
     return {"synced": len(registry), "models": list(registry.keys())}
+
+
+@app.get("/prompts")
+async def get_prompts():
+    """Return all agent prompts from the single source of truth."""
+    return {
+        "manager": {
+            "pipeline": manager_prompt(),
+            "chat": manager_chat_prompt(),
+        },
+        "coder": {
+            "pipeline": coder_prompt(),
+            "chat": coder_chat_prompt(),
+        },
+        "analyst": {
+            "pipeline": analyst_prompt(),
+            "chat": analyst_chat_prompt(),
+        },
+        "critic": {
+            "pipeline": critic_prompt(),
+            "chat": critic_chat_prompt(),
+        },
+    }
+
 
 @app.put("/config/models")
 def update_model_config(body: dict):
@@ -120,12 +171,15 @@ def update_model_config(body: dict):
 # WEBSOCKET — Real-time event stream
 # ══════════════════════════════════════════════════════════════
 
+
 @app.websocket("/ws/agent-stream")
 async def websocket_endpoint(websocket: WebSocket):
     await emitter.connect(websocket)
     try:
         while True:
-            data = await websocket.receive_text()
+            # Keep connection alive — client may send ping/pong or nothing
+            # We just wait for disconnect. Any received text is ignored.
+            await websocket.receive_text()
     except WebSocketDisconnect:
         emitter.disconnect(websocket)
     except Exception:
@@ -135,6 +189,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # ══════════════════════════════════════════════════════════════
 # DUAL-MODE EXECUTION — The main entry points
 # ══════════════════════════════════════════════════════════════
+
 
 class RunRequest(BaseModel):
     prompt: str
@@ -164,11 +219,24 @@ async def run(body: RunRequest):
 
         # AUTO mode: let the router decide
         if mode == "auto":
-            is_complex = any(kw in body.prompt.lower() for kw in [
-                "build", "create", "project", "implement", "system",
-                "multi", "full", "complete", "app", "application",
-                "write a", "develop", "architect"
-            ])
+            is_complex = any(
+                kw in body.prompt.lower()
+                for kw in [
+                    "build",
+                    "create",
+                    "project",
+                    "implement",
+                    "system",
+                    "multi",
+                    "full",
+                    "complete",
+                    "app",
+                    "application",
+                    "write a",
+                    "develop",
+                    "architect",
+                ]
+            )
             mode = "agent" if is_complex else "direct"
 
         if mode == "direct":
@@ -203,12 +271,15 @@ async def run_legacy(query: Query):
 # DIRECT AGENT PROMPT (Node-level)
 # ══════════════════════════════════════════════════════════════
 
+
 @app.post("/run-node")
 async def run_node(query: NodeQuery):
     run_id = str(uuid.uuid4())
     agent_id = query.agent_id
 
-    await emitter.emit(run_id, agent_id, "start", input_str=f"Direct Prompt: {query.prompt}")
+    await emitter.emit(
+        run_id, agent_id, "start", input_str=f"Direct Prompt: {query.prompt}"
+    )
 
     agent_start = time.time()
     result = ""
@@ -229,8 +300,15 @@ async def run_node(query: NodeQuery):
 
         agent_latency = int((time.time() - agent_start) * 1000)
         await emitter.emit(
-            run_id, agent_id, "complete", output_str=result,
-            metadata={"latency_ms": agent_latency, "tokens": len(result), "direct_prompt": True}
+            run_id,
+            agent_id,
+            "complete",
+            output_str=result,
+            metadata={
+                "latency_ms": agent_latency,
+                "tokens": len(result),
+                "direct_prompt": True,
+            },
         )
 
         if agent_id == "coder" and ("```" in result or "def " in result):
@@ -246,6 +324,7 @@ async def run_node(query: NodeQuery):
 # ══════════════════════════════════════════════════════════════
 # WORKSPACE API
 # ══════════════════════════════════════════════════════════════
+
 
 @app.get("/workspace")
 def list_workspace():
@@ -263,24 +342,16 @@ def list_workspace():
                     meta = json.load(f)
 
             files = []
-            SKIP_DIRS = {'.venv', '__pycache__', '.git', 'node_modules', '.mypy_cache'}
+            SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", ".mypy_cache"}
             for root, dirs, filenames in os.walk(item_path):
                 dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
                 for fn in filenames:
                     rel = os.path.relpath(os.path.join(root, fn), item_path)
                     files.append(rel)
 
-            projects.append({
-                "project_id": item,
-                "files": sorted(files),
-                "meta": meta
-            })
+            projects.append({"project_id": item, "files": sorted(files), "meta": meta})
         else:
-            projects.append({
-                "project_id": "__root__",
-                "files": [item],
-                "meta": {}
-            })
+            projects.append({"project_id": "__root__", "files": [item], "meta": {}})
 
     return {"projects": projects}
 
@@ -331,6 +402,7 @@ def delete_workspace_file(project_id: str, filename: str):
 # EXECUTION API
 # ══════════════════════════════════════════════════════════════
 
+
 @app.post("/execute/{project_id}")
 async def execute_project(project_id: str):
     """Run a project's entry point."""
@@ -351,10 +423,12 @@ async def execute_with_autofix(project_id: str):
 # MEMORY API
 # ══════════════════════════════════════════════════════════════
 
+
 @app.get("/memory/history")
 def memory_history():
     """Get recent run history from persistent memory."""
     return {"history": get_run_history(limit=50)}
+
 
 @app.get("/memory/stats")
 def memory_stats():
@@ -366,11 +440,13 @@ def memory_stats():
 # SESSION API
 # ══════════════════════════════════════════════════════════════
 
+
 @app.post("/session")
 def create_new_session():
     """Create a new conversation session."""
     sid = create_session()
     return {"session_id": sid}
+
 
 @app.get("/session/{session_id}")
 def get_session_endpoint(session_id: str):
@@ -379,6 +455,7 @@ def get_session_endpoint(session_id: str):
     if not session:
         return {"error": "Session not found"}
     return session
+
 
 @app.get("/sessions")
 def list_all_sessions():
@@ -390,27 +467,33 @@ def list_all_sessions():
 # AGENT CHAT (Streaming SSE)
 # ══════════════════════════════════════════════════════════════
 
+
 class ChatMessage(BaseModel):
     message: str
     model: Optional[str] = None
     session_id: Optional[str] = None
 
+
 @app.post("/agent/{agent_id}/chat")
 async def agent_chat(agent_id: str, body: ChatMessage):
     """Direct streaming chat with any agent. Returns SSE stream."""
-    agent_map = {
-        "manager": ("manager", "You are a senior AI system planner. Answer the user's question with structured reasoning."),
-        "coder": ("coder", "You are an expert software engineer. Write clean, production-ready code."),
-        "analyst": ("analyst", "You are a senior analyst. Provide clear explanations and reasoning."),
-        "critic": ("critic", "You are an expert reviewer and critic. Evaluate critically and honestly."),
-        "qa": ("qa", "You are a direct, helpful Q&A assistant. Provide definitive, concise answers to the user's questions."),
+    chat_prompts = {
+        "manager": ("manager", manager_chat_prompt()),
+        "coder": ("coder", coder_chat_prompt()),
+        "analyst": ("analyst", analyst_chat_prompt()),
+        "critic": ("critic", critic_chat_prompt()),
+        "reader": ("reader", reader_chat_prompt()),
+        "qa": ("qa", qa_chat_prompt()),
     }
 
-    if agent_id not in agent_map:
+    if agent_id not in chat_prompts:
         return {"error": f"Unknown agent: {agent_id}"}
 
-    model_key, system_instruction = agent_map[agent_id]
-    model = body.model or MODELS.get(model_key, "llama3:8b")
+    model_key, system_instruction = chat_prompts[agent_id]
+    model_cfg = MODELS.get(model_key, "llama3:8b")
+    model = body.model or (
+        model_cfg["name"] if isinstance(model_cfg, dict) else model_cfg
+    )
     full_prompt = f"{system_instruction}\n\nUser: {body.message}"
 
     async def stream_gen():
@@ -425,6 +508,7 @@ async def agent_chat(agent_id: str, body: ChatMessage):
 # STOP / CANCEL
 # ══════════════════════════════════════════════════════════════
 
+
 @app.post("/stop")
 async def stop_all():
     """Cancel all active tasks."""
@@ -435,12 +519,14 @@ async def stop_all():
             cancelled += 1
         del active_tasks[run_id]
 
-    await emitter.emit("system", "system", "error",
-                      error=f"Execution terminated by user ({cancelled} tasks cancelled)")
+    # Emit stop events for all active nodes so UI resets
+    for node_id in ["manager", "coder", "analyst", "critic", "tool", "executor"]:
+        await emitter.emit(node_id, node_id, "error", error="Execution stopped by user")
+
+    await emitter.emit(
+        "system",
+        "system",
+        "error",
+        error=f"Execution terminated by user ({cancelled} tasks cancelled)",
+    )
     return {"status": "stopped", "cancelled": cancelled}
-
-
-
-
-
-

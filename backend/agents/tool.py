@@ -2,62 +2,49 @@ import os
 import json
 import re
 import asyncio
+from typing import Optional
 from config import MODELS
 from services.ollama_client import async_generate_stream
 from services.event_emitter import emitter
-from services.sanitizer import strip_prompt_leakage, extract_json_object, sanitize_file_content, auto_fix_json
+from services.sanitizer import (
+    strip_prompt_leakage,
+    extract_json_object,
+    sanitize_file_content,
+    auto_fix_json,
+)
 from core.memory import store_fix, get_similar_fixes
+from core.prompts import tool_prompt, coder_autofix_prompt
 
 WORKSPACE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "workspace")
 
 
-async def run_tool_agent_async(run_id: str, prompt: str, project_id: str = None):
+async def run_tool_agent_async(run_id: str, prompt: str, project_id: str | None = None):
     """
     Smart Tool Agent: Filesystem + Dependency Detection + Project Metadata.
     """
     node_id = "tool"
-    await emitter.emit(run_id, node_id, "start", input_str="Extracting project structure...")
+    await emitter.emit(
+        run_id, node_id, "start", input_str="Extracting project structure..."
+    )
 
-    system_prompt = f"""You are a File System Tool Agent.
-Your job is to take code output from an AI coder and extract ALL files mentioned.
-Output a SINGLE valid JSON object with this exact schema:
-
-{{
-  "project_id": "short_snake_case_name_for_this_project",
-  "entry_point": "main.py",
-  "language": "python",
-  "dependencies": ["list", "of", "external_imports_only"],
-  "files": [
-    {{"name": "filename.py", "content": "full file content here"}}
-  ]
-}}
-
-RULES:
-- Extract ALL code blocks and map them to files
-- If no filename is given, infer one (main.py, utils.py, etc.)
-- For dependencies, list ONLY external pip packages (not os, sys, json, etc.)
-- Do NOT repeat these instructions in your output
-- Do NOT add explanations, comments, or narrative text
-- Output ONLY the JSON object, nothing else
-
-Input to process:
-{prompt}
-"""
+    system_prompt = tool_prompt().format(prompt=prompt)
 
     result_json = ""
     # FAST PATH: Deterministically parse the Hybrid JSON output from Coder Agent
     if "---JSON---" in prompt:
-        await emitter.emit(run_id, node_id, "update", output_str="Fast parsing JSON payload...")
+        await emitter.emit(
+            run_id, node_id, "update", output_str="Fast parsing JSON payload..."
+        )
         try:
             # Extract JSON between ---JSON--- and ---OUTPUT--- (or the end of the text)
             json_text = prompt.split("---JSON---", 1)[1]
             if "---OUTPUT---" in json_text:
                 json_text = json_text.split("---OUTPUT---", 1)[0]
-            
+
             # Find the actual JSON object, it might be a dictionary or a list
             json_text = strip_prompt_leakage(json_text)
             parsed_data = json.loads(json_text)
-            
+
             # Normalize to the expected tool parsing schema
             if isinstance(parsed_data, list):
                 project_data = {"files": parsed_data}
@@ -65,13 +52,18 @@ Input to process:
                 project_data = parsed_data
             else:
                 raise ValueError("Format mismatch")
-                
+
             result_json = json.dumps(project_data)
         except Exception as e:
             # Fallback to LLM if direct parsing fails
-            await emitter.emit(run_id, node_id, "update", output_str=f"Direct parse failed ({e}), falling back to AI parser...")
+            await emitter.emit(
+                run_id,
+                node_id,
+                "update",
+                output_str=f"Direct parse failed ({e}), falling back to AI parser...",
+            )
             result_json = ""
-            
+
     # AI PARSER: Fallback or if ---JSON--- isn't used
     if not result_json:
         mgr_cfg = MODELS.get("manager", {"name": "llama3:8b"})
@@ -80,20 +72,43 @@ Input to process:
             result_json += chunk
             # Throttle UI updates
             if len(result_json) % 40 == 0:
-                await emitter.emit(run_id, node_id, "update", output_str=f"Parsing structure...\n{result_json[-300:]}")
+                await emitter.emit(
+                    run_id,
+                    node_id,
+                    "update",
+                    output_str=f"Parsing structure...\n{result_json[-300:]}",
+                )
 
     try:
         # Sanitize: strip any prompt leakage before parsing
         cleaned = strip_prompt_leakage(result_json)
         project_data = extract_json_object(cleaned)
-        
+
         # [CRITIC AUTO-VALIDATOR] If JSON parsing fails, ask Critic to repair it
         if not project_data:
-            await emitter.emit(run_id, node_id, "update", output_str="CRITIC: JSON malformed. Auto-repairing output...")
-            project_data = await auto_fix_json(cleaned, "No valid JSON could be extracted from this text.")
-            
+            await emitter.emit(
+                run_id,
+                node_id,
+                "update",
+                output_str="CRITIC: JSON malformed. Auto-repairing output...",
+            )
+            project_data = await auto_fix_json(
+                cleaned, "No valid JSON could be extracted from this text."
+            )
+
         if not project_data:
-            raise ValueError("No valid JSON found in tool output, even after Critic auto-repair")
+            raise ValueError(
+                "No valid JSON found in tool output, even after Critic auto-repair"
+            )
+
+        # Normalize: if we got a list, wrap it in a dict
+        if isinstance(project_data, list):
+            project_data = {"files": project_data, "project_id": "project"}
+        elif not isinstance(project_data, dict):
+            raise ValueError("Unexpected JSON type in tool output")
+
+        # At this point project_data is guaranteed to be a dict
+        assert isinstance(project_data, dict)
 
         pid = project_id or project_data.get("project_id", "project")
         project_dir = os.path.join(WORKSPACE_DIR, pid)
@@ -103,11 +118,14 @@ Input to process:
         created_files = []
         for file_obj in files:
             # Accept both "path" and "name" — Coder uses "name", Tool prompt says "path"
+            if not isinstance(file_obj, dict):
+                continue
             path = file_obj.get("path") or file_obj.get("name")
             content = file_obj.get("content")
             if path and content is not None:
                 # Sanitize: strip markdown wrappers and LLM commentary
                 from services.sanitizer import sanitize_file_content
+
                 content = sanitize_file_content(content)
 
                 # Validate Python files have actual code, not English text
@@ -115,17 +133,37 @@ Input to process:
                     try:
                         compile(content, path, "exec")
                     except SyntaxError:
-                        await emitter.emit(run_id, node_id, "update",
-                                          output_str=f"⚠️ Syntax error in '{path}', attempting cleanup...")
+                        await emitter.emit(
+                            run_id,
+                            node_id,
+                            "update",
+                            output_str=f"⚠️ Syntax error in '{path}', attempting cleanup...",
+                        )
                         # Try stripping common LLM preamble lines
                         lines = content.split("\n")
-                        code_lines = [l for l in lines if not l.strip().startswith(("Based on", "Here is", "Here's", "This script", "This Python"))]
+                        code_lines = [
+                            l
+                            for l in lines
+                            if not l.strip().startswith(
+                                (
+                                    "Based on",
+                                    "Here is",
+                                    "Here's",
+                                    "This script",
+                                    "This Python",
+                                )
+                            )
+                        ]
                         content = "\n".join(code_lines)
                         try:
                             compile(content, path, "exec")
                         except SyntaxError:
-                            await emitter.emit(run_id, node_id, "update",
-                                              output_str=f"⚠️ '{path}' still has syntax errors — saving as-is for auto-fix")
+                            await emitter.emit(
+                                run_id,
+                                node_id,
+                                "update",
+                                output_str=f"⚠️ '{path}' still has syntax errors — saving as-is for auto-fix",
+                            )
 
                 full_path = os.path.join(project_dir, path)
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -145,18 +183,74 @@ Input to process:
             json.dump(meta, f, indent=2)
         created_files.append("project.json")
 
-        summary = f"Project '{pid}' created ({len(created_files)} files):\n" + "\n".join([f"  📄 {f}" for f in created_files])
+        summary = (
+            f"Project '{pid}' created ({len(created_files)} files):\n"
+            + "\n".join([f"  📄 {f}" for f in created_files])
+        )
         if meta["dependencies"]:
             summary += f"\n\n📦 Deps: {', '.join(meta['dependencies'])}"
 
-        await emitter.emit(run_id, node_id, "complete", output_str=summary,
-                           metadata={"files_created": len(created_files), "project_id": pid})
-        return {"status": "success", "files": created_files, "project_id": pid, "meta": meta}
+        await emitter.emit(
+            run_id,
+            node_id,
+            "complete",
+            output_str=summary,
+            metadata={"files_created": len(created_files), "project_id": pid},
+        )
+        return {
+            "status": "success",
+            "files": created_files,
+            "project_id": pid,
+            "meta": meta,
+        }
 
     except Exception as e:
         error_msg = f"Tool Error: {str(e)}"
         await emitter.emit(run_id, node_id, "error", error=error_msg)
         return {"status": "error", "message": error_msg}
+
+
+async def _create_venv_safely(venv_dir: str, project_dir: str) -> str:
+    """
+    Create a virtual environment with proper isolation.
+    Returns the path to the python binary in the venv, or 'python3' if fallback.
+    """
+    try:
+        import venv
+
+        builder = venv.EnvBuilder(with_pip=True, clear=False, symlinks=True)
+        builder.create(venv_dir)
+    except Exception:
+        pass
+
+    if not os.path.exists(venv_dir):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python3",
+                "-m",
+                "venv",
+                "--clear",
+                venv_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=project_dir,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            if proc.returncode != 0:
+                err_text = stderr.decode().strip()[:200] if stderr else "unknown"
+                raise RuntimeError(f"venv creation failed: {err_text}")
+        except asyncio.TimeoutError:
+            raise RuntimeError("venv creation timed out after 60s")
+        except Exception as e:
+            raise RuntimeError(f"venv creation failed: {e}")
+
+    python_bin = os.path.join(venv_dir, "bin", "python3")
+    if not os.path.exists(python_bin):
+        python_bin = os.path.join(venv_dir, "bin", "python")
+    if not os.path.exists(python_bin):
+        raise RuntimeError("venv created but no python binary found")
+
+    return python_bin
 
 
 async def execute_project_async(run_id: str, project_id: str):
@@ -170,7 +264,9 @@ async def execute_project_async(run_id: str, project_id: str):
     await emitter.emit(run_id, node_id, "start", input_str=f"Executing: {project_id}")
 
     if not os.path.exists(meta_path):
-        await emitter.emit(run_id, node_id, "error", error=f"No project.json for '{project_id}'")
+        await emitter.emit(
+            run_id, node_id, "error", error=f"No project.json for '{project_id}'"
+        )
         return {"status": "error", "output": "Missing project.json"}
 
     with open(meta_path, "r") as f:
@@ -179,54 +275,195 @@ async def execute_project_async(run_id: str, project_id: str):
     entry = meta.get("entry_point", "main.py")
     deps = meta.get("dependencies", [])
     venv_dir = os.path.join(project_dir, ".venv")
-    python_bin = os.path.join(venv_dir, "bin", "python3")
 
-    # ── Step 1: Create venv if needed ──
-    if not os.path.exists(venv_dir):
-        await emitter.emit(run_id, node_id, "update", output_str="🔧 Creating isolated venv...")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3", "-m", "venv", venv_dir,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode != 0:
-                await emitter.emit(run_id, node_id, "update", output_str=f"⚠️ venv failed, using system python. ({err.decode().strip()[:50]})")
-                import shutil
-                shutil.rmtree(venv_dir, ignore_errors=True)
-        except Exception as e:
-            await emitter.emit(run_id, node_id, "update", output_str=f"⚠️ venv crash, using system python: {e}")
+    # ── Step 1: Create isolated venv ──
+    actual_python = "python3"
+    venv_ok = False
+    try:
+        await emitter.emit(
+            run_id, node_id, "update", output_str="🔧 Creating isolated venv..."
+        )
+        actual_python = await _create_venv_safely(venv_dir, project_dir)
+        venv_ok = True
+        await emitter.emit(
+            run_id, node_id, "update", output_str=f"✅ Venv ready: {actual_python}"
+        )
+    except Exception as e:
+        await emitter.emit(
+            run_id,
+            node_id,
+            "update",
+            output_str=f"⚠️ Venv failed ({e}), using system python",
+        )
 
     # ── Step 2: Install dependencies ──
-    STDLIB = {"os", "sys", "json", "re", "math", "time", "datetime", "collections",
-              "itertools", "functools", "pathlib", "subprocess", "typing", "random",
-              "string", "io", "hashlib", "copy", "argparse", "logging", "unittest",
-              "csv", "sqlite3", "http", "urllib", "socket", "threading", "asyncio",
-              "abc", "enum", "dataclasses", "textwrap", "shutil", "tempfile",
-              "contextlib", "operator", "struct", "array", "heapq", "bisect"}
+    STDLIB = {
+        "os",
+        "sys",
+        "json",
+        "re",
+        "math",
+        "time",
+        "datetime",
+        "collections",
+        "itertools",
+        "functools",
+        "pathlib",
+        "subprocess",
+        "typing",
+        "random",
+        "string",
+        "io",
+        "hashlib",
+        "copy",
+        "argparse",
+        "logging",
+        "unittest",
+        "csv",
+        "sqlite3",
+        "http",
+        "urllib",
+        "socket",
+        "threading",
+        "asyncio",
+        "abc",
+        "enum",
+        "dataclasses",
+        "textwrap",
+        "shutil",
+        "tempfile",
+        "contextlib",
+        "operator",
+        "struct",
+        "array",
+        "heapq",
+        "bisect",
+        "psutil",
+        "platform",
+        "signal",
+        "warnings",
+        "traceback",
+        "code",
+        "inspect",
+        "dis",
+        "pprint",
+        "reprlib",
+        "numbers",
+        "decimal",
+        "fractions",
+        "statistics",
+        "secrets",
+        "glob",
+        "fnmatch",
+        "stat",
+        "fileinput",
+        "filecmp",
+        "pickle",
+        "shelve",
+        "marshal",
+        "dbm",
+        "configparser",
+        "netrc",
+        "xdrlib",
+        "plistlib",
+        "email",
+        "html",
+        "xml",
+        "webbrowser",
+        "cgi",
+        "cgitb",
+        "wsgiref",
+        "xmlrpc",
+        "ipaddress",
+        "mailbox",
+        "mimetypes",
+        "base64",
+        "binascii",
+        "quopri",
+        "uu",
+        "calendar",
+        "locale",
+        "gettext",
+        "getpass",
+        "curses",
+        "ctypes",
+        "readline",
+        "rlcompleter",
+        "struct",
+        "codecs",
+        "unicodedata",
+        "stringprep",
+        "difflib",
+        "sched",
+        "queue",
+        "_thread",
+        "multiprocessing",
+        "concurrent",
+        "contextvars",
+        "gc",
+        "weakref",
+        "types",
+        "copyreg",
+        "tempfile",
+        "atexit",
+        "builtins",
+        "__future__",
+        "importlib",
+        "pkgutil",
+        "zipimport",
+        "zipfile",
+        "tarfile",
+        "gzip",
+        "bz2",
+        "lzma",
+        "zlib",
+        "hmac",
+        "secrets",
+    }
 
-    external_deps = [d for d in deps if d.lower().split(".")[0] not in STDLIB]
-    
-    # Intelligently fallback to system pip3 if venv pip doesn't exist
-    pip_path = os.path.join(venv_dir, "bin", "pip")
-    pip_bin = pip_path if os.path.exists(pip_path) else "pip3"
+    external_deps = [
+        d for d in deps if d.lower().split(".")[0].split("[")[0] not in STDLIB
+    ]
 
     if external_deps:
-        await emitter.emit(run_id, node_id, "update", output_str=f"📦 Installing: {', '.join(external_deps)}...")
+        pip_bin = os.path.join(venv_dir, "bin", "pip") if venv_ok else "pip3"
+        if not os.path.exists(pip_bin):
+            pip_bin = "pip3"
+
+        await emitter.emit(
+            run_id,
+            node_id,
+            "update",
+            output_str=f"📦 Installing: {', '.join(external_deps)}...",
+        )
         try:
             proc = await asyncio.create_subprocess_exec(
-                pip_bin, "install", *external_deps,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                cwd=project_dir
+                pip_bin,
+                "install",
+                "--quiet",
+                *external_deps,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=project_dir,
+                env={**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"},
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
             if proc.returncode != 0:
-                await emitter.emit(run_id, node_id, "update",
-                                   output_str=f"⚠️ pip warning: {stderr.decode()[:400]}")
+                err_text = stderr.decode().strip()[:500] if stderr else "unknown"
+                await emitter.emit(
+                    run_id, node_id, "update", output_str=f"⚠️ pip warning: {err_text}"
+                )
         except asyncio.TimeoutError:
-            await emitter.emit(run_id, node_id, "update", output_str="⚠️ pip install timed out")
+            await emitter.emit(
+                run_id,
+                node_id,
+                "update",
+                output_str="⚠️ pip install timed out after 180s",
+            )
         except Exception as e:
-            await emitter.emit(run_id, node_id, "update", output_str=f"⚠️ pip error: {e}")
+            await emitter.emit(
+                run_id, node_id, "update", output_str=f"⚠️ pip error: {e}"
+            )
 
     # ── Step 3: Run entry point ──
     entry_path = os.path.join(project_dir, entry)
@@ -234,36 +471,70 @@ async def execute_project_async(run_id: str, project_id: str):
         await emitter.emit(run_id, node_id, "error", error=f"Entry '{entry}' not found")
         return {"status": "error", "output": f"Missing {entry}"}
 
-    actual_python = python_bin if os.path.exists(python_bin) else "python3"
-    await emitter.emit(run_id, node_id, "update", output_str=f"▶ Running: {actual_python} {entry}")
+    if not venv_ok:
+        actual_python = "python3"
+
+    await emitter.emit(
+        run_id, node_id, "update", output_str=f"▶ Running: {actual_python} {entry}"
+    )
+
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
+    if venv_ok:
+        env["VIRTUAL_ENV"] = venv_dir
+        env["PATH"] = (
+            os.path.join(venv_dir, "bin") + os.pathsep + os.environ.get("PATH", "")
+        )
 
     try:
         process = await asyncio.create_subprocess_exec(
-            actual_python, entry,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=project_dir
+            actual_python,
+            entry,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=project_dir,
+            env=env,
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
 
-        output = stdout.decode()
-        errors = stderr.decode()
+        output = stdout.decode(errors="replace")
+        errors = stderr.decode(errors="replace")
 
         if process.returncode == 0:
-            result = f"✅ Success (exit 0)\n\n--- stdout ---\n{output}" if output else "✅ Success (no output)"
-            await emitter.emit(run_id, node_id, "complete", output_str=result,
-                             metadata={"exit_code": 0, "project_id": project_id})
-            return {"status": "success", "output": output, "exit_code": 0}
+            result = (
+                f"✅ Success (exit 0)\n\n--- stdout ---\n{output}"
+                if output
+                else "✅ Success (no output)"
+            )
+            await emitter.emit(
+                run_id,
+                node_id,
+                "complete",
+                output_str=result,
+                metadata={"exit_code": 0, "project_id": project_id, "venv": venv_ok},
+            )
+            return {
+                "status": "success",
+                "output": output,
+                "exit_code": 0,
+                "venv": venv_ok,
+            }
         else:
             result = f"❌ Failed (exit {process.returncode})\n\n--- stderr ---\n{errors}\n--- stdout ---\n{output}"
             await emitter.emit(run_id, node_id, "error", error=result)
-            return {"status": "error", "output": output, "errors": errors, "exit_code": process.returncode}
+            return {
+                "status": "error",
+                "output": output,
+                "errors": errors,
+                "exit_code": process.returncode,
+                "venv": venv_ok,
+            }
 
     except asyncio.TimeoutError:
-        await emitter.emit(run_id, node_id, "error", error="⏱️ Timeout (30s)")
-        return {"status": "error", "output": "Timeout"}
+        await emitter.emit(run_id, node_id, "error", error="⏱️ Timeout (60s)")
+        return {"status": "error", "output": "Timeout after 60s", "venv": venv_ok}
     except Exception as e:
         await emitter.emit(run_id, node_id, "error", error=f"Runtime: {str(e)}")
-        return {"status": "error", "output": str(e)}
+        return {"status": "error", "output": str(e), "venv": venv_ok}
 
 
 async def autofix_loop_async(run_id: str, project_id: str, max_retries: int = 2):
@@ -302,40 +573,54 @@ async def autofix_loop_async(run_id: str, project_id: str, max_retries: int = 2)
             with open(entry_path, "r") as f:
                 original_code = f.read()
 
-        fix_prompt = f"""Fix this Python code error. Return ONLY the complete fixed code in a ```python block.
-{memory_hint}
-ERROR:
-{error_output[:1500]}
+        fix_prompt = coder_autofix_prompt().format(
+            memory_hint=memory_hint,
+            error_output=error_output[:1500],
+            entry=entry,
+            original_code=original_code,
+        )
 
-CODE ({entry}):
-```python
-{original_code}
-```"""
-
-        await emitter.emit(run_id, "coder", "start", input_str=f"Auto-fix attempt {attempt}/{max_retries}")
+        await emitter.emit(
+            run_id,
+            "coder",
+            "start",
+            input_str=f"Auto-fix attempt {attempt}/{max_retries}",
+        )
         fixed_code = ""
         async for chunk in run_coder_async(fix_prompt):
             fixed_code += chunk
             await emitter.emit(run_id, "coder", "update", output_str=fixed_code)
 
-        code_match = re.search(r'```python\s*(.*?)```', fixed_code, re.DOTALL)
+        code_match = re.search(r"```python\s*(.*?)```", fixed_code, re.DOTALL)
         patched = code_match.group(1).strip() if code_match else fixed_code.strip()
 
         with open(entry_path, "w") as f:
             f.write(patched)
 
-        await emitter.emit(run_id, "coder", "complete",
-                         output_str=f"Patch applied to {entry} (attempt {attempt})",
-                         metadata={"attempt": attempt})
+        await emitter.emit(
+            run_id,
+            "coder",
+            "complete",
+            output_str=f"Patch applied to {entry} (attempt {attempt})",
+            metadata={"attempt": attempt},
+        )
 
         # Store fix attempt in memory
-        store_fix(run_id, project_id, error_output[:2000], patched[:5000], attempt, False)
+        store_fix(
+            run_id, project_id, error_output[:2000], patched[:5000], attempt, False
+        )
 
     # Final run after all patches
     final = await execute_project_async(run_id, project_id)
 
     # Store the final fix result
-    store_fix(run_id, project_id, "final_attempt", "see_project_files", max_retries + 1,
-              final["status"] == "success")
+    store_fix(
+        run_id,
+        project_id,
+        "final_attempt",
+        "see_project_files",
+        max_retries + 1,
+        final["status"] == "success",
+    )
 
     return final

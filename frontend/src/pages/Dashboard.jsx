@@ -1,16 +1,16 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Terminal, Activity, Search, Cpu, Zap, BrainCircuit, Network,
-  Play, StopCircle, FolderTree, Clock, HardDrive, Wifi, MessageSquare, MessageCircle,
-  LayoutDashboard, ChevronRight, Square, Radio, ChevronLeft, WifiOff,
+  FolderTree, Clock, Wifi, MessageSquare, MessageCircle, Square, WifiOff,
   AlertTriangle, CheckCircle2, Loader2, PanelLeftClose, PanelLeft
 } from 'lucide-react';
-import AgentCanvas from './components/AgentCanvas';
-import WorkspaceExplorer from './components/WorkspaceExplorer';
-import AgentChat from './components/AgentChat';
-import SimpleChat from './components/SimpleChat';
-import { useAgentStore } from './store/useAgentStore';
+import AgentCanvas from '../components/AgentCanvas';
+import WorkspaceExplorer from '../components/WorkspaceExplorer';
+import SimpleChat from '../components/SimpleChat';
+import AgentChat from '../components/AgentChat';
+import TimelinePanel from '../components/TimelinePanel';
+import { useAgentStore } from '../store/useAgentStore';
 
 const API = "http://127.0.0.1:8888";
 
@@ -135,6 +135,75 @@ export default function Dashboard() {
   const { nodesState, executionLog, projects } = useAgentStore();
   const isSystemActive = Object.values(nodesState).some(n => n?.status === 'running');
 
+  // ── Global WebSocket (persists across tab switches) ──
+  const wsRef = useRef(null);
+  const [wsStatus, setWsStatus] = useState('disconnected');
+  const storeRef = useRef({ updateNode: null, addTimelineEvent: null });
+  storeRef.current.updateNode = useAgentStore.getState().updateNode;
+  storeRef.current.addTimelineEvent = useAgentStore.getState().addTimelineEvent;
+
+  useEffect(() => {
+    let ws;
+    let reconnectTimer;
+    let pingTimer;
+
+    const connect = () => {
+      setWsStatus('connecting');
+      ws = new WebSocket('ws://127.0.0.1:8888/ws/agent-stream');
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsStatus('connected');
+        pingTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 15000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          storeRef.current.addTimelineEvent(data);
+          const { run_id, node_id, type, input, output, metadata, error } = data;
+          if (type === 'start') {
+            storeRef.current.updateNode(run_id, node_id, { status: 'running', input: input || '', output: '', error: '' });
+          } else if (type === 'update') {
+            storeRef.current.updateNode(run_id, node_id, { output });
+          } else if (type === 'complete') {
+            storeRef.current.updateNode(run_id, node_id, { status: 'success', output, metadata: metadata || {} });
+          } else if (type === 'error') {
+            storeRef.current.updateNode(run_id, node_id, { status: 'error', error });
+          }
+        } catch (e) {
+          console.warn('WS parse error:', e);
+        }
+      };
+
+      ws.onclose = () => {
+        clearInterval(pingTimer);
+        setWsStatus('disconnected');
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+
+      ws.onerror = () => {
+        setWsStatus('error');
+        ws.close();
+      };
+    };
+
+    connect();
+
+    return () => {
+      clearTimeout(reconnectTimer);
+      clearInterval(pingTimer);
+      if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.onclose = null;
+        ws.close();
+      }
+    };
+  }, []);
+
   // ── Health check polling ──
   const [health, setHealth] = useState({ ollama: 'checking', models: [], backend: 'checking' });
   useEffect(() => {
@@ -144,7 +213,9 @@ export default function Dashboard() {
         const data = await res.json();
         setHealth(data);
         if (data.models && data.configured) {
-          useAgentStore.getState().setAvailableModels(data.models);
+          const BLOCKED = ["uncensored", "abliterated", "gurubot"];
+          const safe = data.models.filter(m => !BLOCKED.some(kw => m.toLowerCase().includes(kw)));
+          useAgentStore.getState().setAvailableModels(safe);
           useAgentStore.getState().setConfiguredModels(data.configured);
         }
       } catch {
@@ -210,8 +281,12 @@ export default function Dashboard() {
   const handleStop = async () => {
     try {
       await fetch(`${API}/stop`, { method: "POST" });
-      // Removed resetAll() so logs stay visible after stopping
+      useAgentStore.getState().resetAll();
     } catch (e) { }
+  };
+
+  const handleClearLogs = async () => {
+    useAgentStore.getState().resetAll();
   };
 
   const TABS = useMemo(() => [
@@ -229,12 +304,48 @@ export default function Dashboard() {
       {/* ── Animated Background ── */}
       <div className="fixed inset-0 -z-10 pointer-events-none">
         <div className="absolute inset-0 bg-[#050505]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_20%_50%,rgba(0,240,255,0.04)_0,transparent_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_80%_20%,rgba(168,85,247,0.03)_0,transparent_60%)]" />
+        <motion.div 
+          animate={{ opacity: [0.04, 0.06, 0.04] }}
+          transition={{ duration: 8, repeat: Infinity }}
+          className="absolute inset-0 bg-[radial-gradient(ellipse_at_20%_50%,rgba(0,240,255,0.06)_0,transparent_60%)]" 
+        />
+        <motion.div 
+          animate={{ opacity: [0.03, 0.05, 0.03] }}
+          transition={{ duration: 10, repeat: Infinity }}
+          className="absolute inset-0 bg-[radial-gradient(ellipse_at_80%_20%,rgba(168,85,247,0.05)_0,transparent_60%)]" 
+        />
+        <motion.div 
+          animate={{ opacity: [0.02, 0.04, 0.02] }}
+          transition={{ duration: 12, repeat: Infinity }}
+          className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_80%,rgba(236,72,153,0.04)_0,transparent_60%)]" 
+        />
         {/* Subtle animated noise overlay */}
         <div className="absolute inset-0 opacity-[0.015]" style={{
           backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`,
         }} />
+        {/* Floating particles */}
+        <div className="absolute inset-0 overflow-hidden">
+          {[...Array(15)].map((_, i) => (
+            <motion.div
+              key={i}
+              className="absolute w-0.5 h-0.5 rounded-full bg-cyan-400/20"
+              style={{
+                left: `${Math.random() * 100}%`,
+                top: `${Math.random() * 100}%`,
+              }}
+              animate={{
+                y: [0, -20, 0],
+                x: [0, Math.random() * 10 - 5, 0],
+                opacity: [0.1, 0.4, 0.1],
+              }}
+              transition={{
+                duration: 3 + Math.random() * 3,
+                repeat: Infinity,
+                delay: Math.random() * 2,
+              }}
+            />
+          ))}
+        </div>
       </div>
 
       {/* ── SIDEBAR ── */}
@@ -247,9 +358,13 @@ export default function Dashboard() {
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-white/[0.06] min-h-[68px]">
-          <div className="p-2 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 border border-white/10 shrink-0">
+          <motion.div 
+            whileHover={{ rotate: 360 }}
+            transition={{ duration: 0.5 }}
+            className="p-2 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 border border-white/10 shrink-0 animate-neon-pulse"
+          >
             <BrainCircuit className="text-cyan-400 w-5 h-5" />
-          </div>
+          </motion.div>
           <AnimatePresence>
             {isSidebarVisible && (
               <motion.div
@@ -260,7 +375,7 @@ export default function Dashboard() {
                 className="flex items-center gap-2 overflow-hidden"
               >
                 <h1 className="text-lg font-bold tracking-tight whitespace-nowrap">
-                  Local<span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500">AI</span>
+                  Local<span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 animate-gradient-shift bg-[length:200%_200%]">AI</span>
                 </h1>
               </motion.div>
             )}
@@ -354,6 +469,8 @@ export default function Dashboard() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-600" />
               <input
                 ref={searchInputRef}
+                name="command-input"
+                id="command-input"
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -407,6 +524,14 @@ export default function Dashboard() {
 
             {/* Connection Status */}
             <ConnectionStatus health={health} />
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[10px] font-mono transition-all ${
+              wsStatus === 'connected' ? 'bg-green-500/10 border-green-500/20 text-green-400' :
+              wsStatus === 'connecting' ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400' :
+              'bg-red-500/10 border-red-500/20 text-red-400'
+            }`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${wsStatus === 'connected' ? 'bg-green-400' : wsStatus === 'connecting' ? 'bg-yellow-400' : 'bg-red-400'} animate-pulse`} />
+              <span className="hidden sm:inline">WS {wsStatus}</span>
+            </div>
 
             <div className="flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] px-2.5 py-1 rounded-lg text-[10px] font-mono">
               <span className="text-pink-400">{sysStats.total_runs} runs</span>
@@ -415,25 +540,34 @@ export default function Dashboard() {
             </div>
 
             <button
-               onClick={() => useAgentStore.getState().resetAll()}
+               onClick={handleClearLogs}
                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.06] rounded-lg text-gray-400 hover:text-white text-[11px] font-bold transition-all"
             >
                Clear Logs
             </button>
 
-            {/* Stop button */ }
-            {isSystemActive ? (
-              <button
-                onClick={handleStop}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 text-[11px] font-bold transition-all animate-pulse"
-              >
-                <Square className="w-3 h-3 fill-red-400" /> Stop
-              </button>
-            ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.03] border border-white/[0.06] rounded-lg text-[11px] text-gray-500">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> Ready
-              </div>
-            )}
+            {/* Stop All Agents button - always visible */}
+            <button
+              onClick={handleStop}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${
+                isSystemActive
+                  ? 'bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-400 animate-pulse'
+                  : 'bg-white/[0.03] hover:bg-red-500/10 border-white/[0.06] hover:border-red-500/20 text-gray-500 hover:text-red-400'
+              }`}
+              title="Stop all running agents"
+            >
+              <Square className="w-3 h-3 fill-current" /> Stop All
+            </button>
+
+            {/* Status indicator */}
+            <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${
+              isSystemActive
+                ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+                : 'bg-white/[0.03] border-white/[0.06] text-gray-500'
+            }`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${isSystemActive ? 'bg-cyan-400 animate-pulse' : 'bg-green-400'}`} />
+              {isSystemActive ? 'Running' : 'Idle'}
+            </div>
           </div>
         </div>
 
@@ -493,55 +627,6 @@ export default function Dashboard() {
                 <WorkspaceExplorer />
               </motion.div>
             )}
-          </AnimatePresence>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Timeline Panel (Canvas tab only) ──
-
-function TimelinePanel({ executionLog }) {
-  // Only show start, complete, and error events to reduce noise
-  const filteredLog = executionLog.filter(log => log.type !== 'update');
-
-  return (
-    <div className="w-[380px] flex flex-col gap-4 shrink-0">
-      <div className="flex-1 glass-panel rounded-2xl flex flex-col overflow-hidden bg-gradient-to-b from-black/40 to-black/80 border border-white/5">
-        <div className="p-4 border-b border-white/[0.06] flex items-center gap-2">
-          <Zap className="w-4 h-4 text-cyan-400" />
-          <span className="font-bold text-gray-200 text-xs uppercase tracking-wider">Timeline (Live)</span>
-          <span className="ml-auto text-[10px] text-cyan-400 font-mono flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-pulse"></span> {executionLog.length} events</span>
-        </div>
-        <div className="flex-1 p-3 overflow-y-auto space-y-2 font-mono text-[10px] custom-scrollbar flex flex-col-reverse">
-          <AnimatePresence>
-            {[...filteredLog].reverse().map((log) => (
-              <motion.div
-                key={log.event_id}
-                initial={{ opacity: 0, x: -10, scale: 0.95 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                layout
-                className="bg-[#0a0a0f] border border-white/5 rounded-lg p-3 hover:border-white/10 transition-colors mb-2"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-gray-500 text-[9px] flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{new Date(log.timestamp).toLocaleTimeString()}</span>
-                  <span className={`uppercase font-bold tracking-widest text-[8px] px-1.5 py-0.5 rounded border ${log.type === 'start' ? 'text-amber-400 border-amber-400/20 bg-amber-400/5' :
-                      log.type === 'complete' ? 'text-green-400 border-green-400/20 bg-green-400/5' :
-                        log.type === 'error' ? 'text-red-400 border-red-400/20 bg-red-400/5' : 'text-cyan-400 border-cyan-400/20 bg-cyan-400/5'
-                    }`}>
-                    {log.node_id} · {log.type}
-                  </span>
-                </div>
-                <div className="text-gray-300 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar pr-1">
-                    {log.type === 'start' && <div className="text-amber-200 opacity-60 mb-1">▶ EXEC_TARGET: {log.node_id}</div>}
-                    <span className="whitespace-pre-wrap break-words">
-                      {log.output ? String(log.output).slice(0, 500) : String(log.input).slice(0, 500)}
-                    </span>
-                </div>
-              </motion.div>
-            )).slice(0, 50)}
-
           </AnimatePresence>
         </div>
       </div>

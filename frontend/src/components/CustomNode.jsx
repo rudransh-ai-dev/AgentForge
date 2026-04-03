@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { motion } from 'framer-motion';
 import { Handle, Position } from '@xyflow/react';
-import { Activity, Clock, FileCode2, Cpu, FileWarning, Send } from 'lucide-react';
+import { Activity, Clock, FileCode2, Cpu, FileWarning, Send, Zap } from 'lucide-react';
 
 export default function CustomNode({ id, data }) {
   const { label, stateData } = data;
@@ -9,9 +10,9 @@ export default function CustomNode({ id, data }) {
   
   const statusColors = {
      idle: 'border-white/10 text-gray-400 bg-[#0a0a0f]',
-     running: 'border-cyan-400 shadow-[0_0_20px_rgba(0,240,255,0.2)] text-cyan-400 bg-black/60',
-     success: 'border-green-400 shadow-[0_0_15px_rgba(34,197,94,0.15)] text-green-400 bg-black/50',
-     error: 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)] text-red-500 bg-black/50'
+     running: 'border-cyan-400 shadow-[0_0_25px_rgba(0,240,255,0.25)] text-cyan-400 bg-black/60',
+     success: 'border-green-400 shadow-[0_0_20px_rgba(34,197,94,0.2)] text-green-400 bg-black/50',
+     error: 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.25)] text-red-500 bg-black/50'
   };
 
   const currentStatus = stateData?.status || 'idle';
@@ -37,20 +38,38 @@ export default function CustomNode({ id, data }) {
   };
 
   return (
-    <div className={`p-4 rounded-xl border-2 w-72 transition-all duration-300 relative group ${isManager ? 'hover:scale-105 hover:shadow-[0_0_40px_rgba(0,240,255,0.4)] z-50' : ''} ${statusColors[currentStatus]}`}>
+    <div className={`p-4 rounded-xl border-2 w-72 transition-all duration-300 relative group ${isManager ? 'hover:scale-105 hover:shadow-[0_0_50px_rgba(0,240,255,0.5)] z-50' : 'hover:scale-[1.02]'} ${statusColors[currentStatus]}`}>
       
       {/* Dynamic AI Core Effect for Manager Node */}
       {isManager && (
          <div className="absolute inset-0 pointer-events-none -z-10 overflow-visible flex items-center justify-center">
             {/* Pulsing Core Glow */}
-            <div className={`absolute w-full h-full rounded-xl transition-all duration-700 ${currentStatus === 'running' ? 'bg-cyan-500/20 blur-xl animate-pulse scale-125' : currentStatus === 'error' ? 'bg-red-500/20 blur-xl animate-pulse scale-110' : 'bg-cyan-500/5 blur-lg scale-100'}`} />
+            <div className={`absolute w-full h-full rounded-xl transition-all duration-700 ${currentStatus === 'running' ? 'bg-cyan-500/25 blur-xl animate-pulse scale-125' : currentStatus === 'error' ? 'bg-red-500/25 blur-xl animate-pulse scale-110' : 'bg-cyan-500/5 blur-lg scale-100'}`} />
             
             {/* Orbiting Ring 1 */}
-            <div className={`absolute w-[140%] h-[140%] rounded-full border border-white/5 border-t-cyan-400/30 border-b-purple-400/30 animate-[spin_10s_linear_infinite] ${currentStatus === 'running' ? 'opacity-100 animate-[spin_3s_linear_infinite]' : 'opacity-30'}`} />
+            <div className={`absolute w-[140%] h-[140%] rounded-full border border-white/5 border-t-cyan-400/30 border-b-purple-400/30 ${currentStatus === 'running' ? 'opacity-100 animate-[spin_3s_linear_infinite]' : 'opacity-30 animate-[spin_10s_linear_infinite]'}`} />
             
             {/* Orbiting Ring 2 (Counter Spin) */}
-            <div className={`absolute w-[160%] h-[160%] rounded-full border border-white/5 border-l-cyan-400/20 border-r-pink-400/20 animate-[spin_15s_linear_infinite_reverse] ${currentStatus === 'running' ? 'opacity-100 animate-[spin_4s_linear_infinite_reverse]' : 'opacity-20'}`} />
+            <div className={`absolute w-[160%] h-[160%] rounded-full border border-white/5 border-l-cyan-400/20 border-r-pink-400/20 ${currentStatus === 'running' ? 'opacity-100 animate-[spin_4s_linear_infinite_reverse]' : 'opacity-20 animate-[spin_15s_linear_infinite_reverse]'}`} />
+            
+            {/* Orbiting Ring 3 */}
+            <div className={`absolute w-[180%] h-[180%] rounded-full border border-white/5 border-t-purple-400/10 border-b-cyan-400/10 ${currentStatus === 'running' ? 'opacity-80 animate-[spin_5s_linear_infinite]' : 'opacity-10 animate-[spin_20s_linear_infinite]'}`} />
          </div>
+      )}
+      
+      {/* Status indicator dot for non-manager nodes */}
+      {!isManager && currentStatus !== 'idle' && (
+        <div className="absolute -top-1 -right-1">
+          <motion.div 
+            className={`w-2.5 h-2.5 rounded-full ${
+              currentStatus === 'running' ? 'bg-cyan-400 shadow-[0_0_10px_rgba(0,240,255,0.8)]' :
+              currentStatus === 'success' ? 'bg-green-400 shadow-[0_0_10px_rgba(34,197,94,0.8)]' :
+              'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'
+            }`}
+            animate={{ scale: [1, 1.3, 1] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+          />
+        </div>
       )}
       
       {/* Input Handle */}
@@ -63,13 +82,15 @@ export default function CustomNode({ id, data }) {
            {label}
          </span>
          
-         <div className={`px-2 py-0.5 rounded-full border ${
+         <div className={`px-2 py-0.5 rounded-full border flex items-center gap-1 ${
            currentStatus === 'running' ? 'bg-cyan-500/10 border-cyan-500/30' : 
            currentStatus === 'success' ? 'bg-green-500/10 border-green-500/30' :
            currentStatus === 'error' ? 'bg-red-500/10 border-red-500/30' :
            'bg-white/5 border-white/10'
          }`}>
-           {currentStatus === 'running' ? <Activity className="w-3 h-3 animate-spin" /> : currentStatus}
+           {currentStatus === 'running' ? <Activity className="w-3 h-3 animate-spin" /> : 
+            currentStatus === 'success' ? <Zap className="w-3 h-3" /> :
+            currentStatus}
          </div>
       </div>
 
@@ -85,7 +106,6 @@ export default function CustomNode({ id, data }) {
                   </div>
               ) : stateData.output ? (
                   isManager && typeof stateData.output === 'string' && stateData.output.startsWith('{') ? (
-                      // Manager parsed JSON decision rendering beautifully
                       <pre className="text-cyan-200/90 whitespace-pre-wrap font-mono text-[9px]">
                         {(() => {
                             try { return JSON.stringify(JSON.parse(stateData.output), null, 2); }
@@ -93,7 +113,6 @@ export default function CustomNode({ id, data }) {
                         })()}
                       </pre>
                   ) : (
-                      // Agent generation rendering
                       <span className="whitespace-pre-wrap break-words">{stateData.output}</span>
                   )
               ) : (
@@ -122,6 +141,8 @@ export default function CustomNode({ id, data }) {
       {!isInputNode && !isManager && (
         <div className="mt-3 relative opacity-0 group-hover:opacity-100 transition-opacity duration-300">
           <input
+             name={`node-prompt-${id}`}
+             id={`node-prompt-${id}`}
              type="text"
              value={nodePrompt}
              onChange={(e) => setNodePrompt(e.target.value)}

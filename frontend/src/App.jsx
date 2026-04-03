@@ -1,9 +1,9 @@
 import React from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
-import Dashboard from './Dashboard'
+import Dashboard from './pages/Dashboard'
 import './index.css'
 
-import LandingPage from './LandingPage'
+import LandingPage from './pages/LandingPage'
 
 function App() {
   const [hasEntered, setHasEntered] = React.useState(false);

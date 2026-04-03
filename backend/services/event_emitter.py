@@ -2,7 +2,8 @@ import json
 import uuid
 import time
 from fastapi import WebSocket
-from typing import List
+from typing import List, Optional
+
 
 class EventEmitter:
     def __init__(self):
@@ -16,7 +17,16 @@ class EventEmitter:
         if ws in self.connections:
             self.connections.remove(ws)
 
-    async def emit(self, run_id: str, node_id: str, type_str: str, input_str: str = "", output_str: str = "", metadata: dict = None, error: str = ""):
+    async def emit(
+        self,
+        run_id: str,
+        node_id: str,
+        type_str: str,
+        input_str: str = "",
+        output_str: str = "",
+        metadata: dict | None = None,
+        error: str = "",
+    ):
         event = {
             "event_id": str(uuid.uuid4()),
             "run_id": run_id,
@@ -25,15 +35,16 @@ class EventEmitter:
             "input": input_str,
             "output": output_str,
             "error": error,
-            "metadata": metadata or {},
-            "timestamp": int(time.time() * 1000)
+            "metadata": metadata if metadata is not None else {},
+            "timestamp": int(time.time() * 1000),
         }
-        
+
         # Broadcast to all connected clients
         for ws in self.connections.copy():
             try:
                 await ws.send_text(json.dumps(event))
             except Exception:
                 self.disconnect(ws)
+
 
 emitter = EventEmitter()

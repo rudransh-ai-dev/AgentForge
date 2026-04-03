@@ -1,14 +1,16 @@
 import { create } from 'zustand';
 
-export const useAgentStore = create((set, get) => ({
-  nodesState: {
-    manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-    coder: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-    analyst: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-    critic: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-    tool: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-    executor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-  },
+const INITIAL_NODES_STATE = {
+  manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  coder: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  analyst: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  critic: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  tool: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  executor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+};
+
+export const useAgentStore = create((set) => ({
+  nodesState: { ...INITIAL_NODES_STATE },
   executionLog: [],
   activeRunId: null,
   selectedNodeId: null,
@@ -46,49 +48,8 @@ export const useAgentStore = create((set, get) => ({
   })),
 
   resetAll: () => set({
-    nodesState: {
-      manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-      coder: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-      analyst: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-      critic: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-      tool: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-      executor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-    },
+    nodesState: { ...INITIAL_NODES_STATE },
     activeRunId: null,
     executionLog: [],
   }),
-
-  // Replay
-  replayTimeline: async () => {
-    const { executionLog } = get();
-    if (!executionLog.length) return;
-
-    set({
-      nodesState: {
-        manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-        coder: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-        analyst: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-        critic: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-        tool: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-        executor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-      }
-    });
-
-    for (const ev of executionLog) {
-      await new Promise(resolve => setTimeout(resolve, ev.type === 'start' ? 500 : ev.type === 'complete' ? 1000 : 70));
-      const payload = {};
-      if (ev.type === 'start') { payload.status = 'running'; payload.input = ev.input || ''; payload.output = ''; payload.error = ''; }
-      else if (ev.type === 'update') { payload.output = ev.output; }
-      else if (ev.type === 'complete') { payload.status = 'success'; payload.output = ev.output; payload.metadata = ev.metadata || {}; }
-      else if (ev.type === 'error') { payload.status = 'error'; payload.error = ev.error; }
-
-      set((state) => ({
-        activeRunId: ev.run_id,
-        nodesState: {
-          ...state.nodesState,
-          [ev.node_id]: { ...(state.nodesState[ev.node_id] || {}), ...payload }
-        }
-      }));
-    }
-  }
 }));
