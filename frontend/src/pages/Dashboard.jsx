@@ -3,26 +3,28 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Terminal, Activity, Search, Cpu, Zap, BrainCircuit, Network,
   FolderTree, Clock, Wifi, MessageSquare, MessageCircle, Square, WifiOff,
-  AlertTriangle, CheckCircle2, Loader2, PanelLeftClose, PanelLeft
+  AlertTriangle, CheckCircle2, Loader2, PanelLeftClose, PanelLeft, BarChart3, Users
 } from 'lucide-react';
 import AgentCanvas from '../components/AgentCanvas';
 import WorkspaceExplorer from '../components/WorkspaceExplorer';
 import SimpleChat from '../components/SimpleChat';
 import AgentChat from '../components/AgentChat';
 import TimelinePanel from '../components/TimelinePanel';
+import StatusBar from '../components/StatusBar';
+import PerformanceDashboard from '../components/PerformanceDashboard';
+import CustomAgentManager from '../components/CustomAgentManager';
+import NodeSidebar from '../components/NodeSidebar';
 import { useAgentStore } from '../store/useAgentStore';
 
-const API = "http://127.0.0.1:8888";
+const API = "";
 
-// ── Page transition variants ──
 const pageVariants = {
-  initial: { opacity: 0, scale: 0.98, y: 8 },
-  animate: { opacity: 1, scale: 1, y: 0 },
-  exit: { opacity: 0, scale: 0.98, y: -8 },
+  initial: { opacity: 0, y: 4 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -4 },
 };
-const pageTransition = { duration: 0.25, ease: [0.4, 0, 0.2, 1] };
+const pageTransition = { duration: 0.15, ease: [0.4, 0, 0.2, 1] };
 
-// ── Connection Status Component ──
 function ConnectionStatus({ health }) {
   const [showModels, setShowModels] = useState(false);
   const popoverRef = React.useRef(null);
@@ -38,81 +40,56 @@ function ConnectionStatus({ health }) {
   }, [showModels]);
 
   const statusMap = {
-    connected: { icon: <Wifi className="w-3 h-3" />, color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/20", label: "Ollama" },
-    disconnected: { icon: <WifiOff className="w-3 h-3" />, color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/20", label: "Offline" },
-    checking: { icon: <Loader2 className="w-3 h-3 animate-spin" />, color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/20", label: "Checking" },
+    connected: { icon: <Wifi className="w-3 h-3" />, color: 'text-success', bg: 'bg-success/10', border: 'border-success/20', label: 'Ollama' },
+    disconnected: { icon: <WifiOff className="w-3 h-3" />, color: 'text-danger', bg: 'bg-danger/10', border: 'border-danger/20', label: 'Offline' },
+    checking: { icon: <Loader2 className="w-3 h-3 animate-spin" />, color: 'text-attention', bg: 'bg-attention/10', border: 'border-attention/20', label: 'Checking' },
   };
   const s = statusMap[health.ollama] || statusMap.checking;
 
   return (
     <div className="relative" ref={popoverRef}>
-      <button 
+      <button
         onClick={() => setShowModels(!showModels)}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${s.bg} border ${s.border} text-[10px] font-mono ${s.color} transition-all duration-300 hover:brightness-125 cursor-pointer active:scale-95`}
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${s.bg} border ${s.border} ${s.color} transition-colors cursor-pointer`}
       >
         {s.icon}
         <span className="hidden sm:inline">{s.label}</span>
         {health.models?.length > 0 && (
-          <span className="text-gray-500 hidden md:inline">· {health.models.length} models</span>
+          <span className="text-fgSubtle hidden md:inline">({health.models.length})</span>
         )}
       </button>
 
       <AnimatePresence>
         {showModels && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.98 }}
-            transition={{ duration: 0.15 }}
-            className="absolute top-full right-0 mt-3 w-80 bg-[#000000] border border-white/10 rounded-xl shadow-[0_30px_90px_rgba(0,0,0,1)] z-[100] overflow-hidden"
+            initial={{ opacity: 0, y: 4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.98 }}
+            transition={{ duration: 0.1 }}
+            className="absolute top-full right-0 mt-1 w-72 bg-canvasSubtle border border-borderDefault rounded-md shadow-dropdown z-50 overflow-hidden"
           >
-            <div className="p-4 border-b border-white/[0.1] bg-[#050505]">
-              <span className="text-[11px] font-bold text-gray-300 uppercase tracking-[0.2em] flex items-center gap-2.5">
-                <div className="p-1 rounded-md bg-cyan-500/10 border border-cyan-500/20">
-                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-                </div>
+            <div className="px-3 py-2 border-b border-borderDefault">
+              <span className="text-xs font-semibold text-fgDefault flex items-center gap-2">
+                <Cpu className="w-3.5 h-3.5 text-accent" />
                 Available Models
               </span>
             </div>
-            
-            <div className="p-1.5 max-h-[350px] overflow-y-auto custom-scrollbar bg-black">
+
+            <div className="p-1.5 max-h-[300px] overflow-y-auto">
               {health.models?.length > 0 ? (
                 health.models.map((model, idx) => (
-                  <div 
-                    key={idx} 
-                    className="flex items-center gap-4 px-3.5 py-3 rounded-lg hover:bg-white/[0.06] transition-all group cursor-default mb-1 last:mb-0"
-                    title={model}
+                  <div
+                    key={idx}
+                    className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-canvas text-xs text-fgDefault transition-colors"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-[#0a0a0f] border border-white/[0.08] flex items-center justify-center text-[11px] text-cyan-500 font-bold group-hover:border-cyan-500/40 group-hover:bg-cyan-500/10 transition-all shrink-0">
-                      {idx + 1}
-                    </div>
-                    
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span className="text-[13px] font-semibold text-gray-200 truncate group-hover:text-white transition-colors">
-                        {model}
-                      </span>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[9px] text-gray-600 font-mono tracking-wider uppercase">manifest</span>
-                        <div className="w-1 h-1 rounded-full bg-gray-700" />
-                        <span className="text-[9px] text-gray-600 font-mono tracking-wider uppercase">local</span>
-                      </div>
-                    </div>
-                    
-                    <div className="shrink-0">
-                       <div className="w-2 h-2 rounded-full bg-cyan-500/50 shadow-[0_0_10px_rgba(6,182,212,0.6)] group-hover:bg-cyan-400 group-hover:shadow-[0_0_15px_rgba(6,182,212,0.8)] transition-all" />
-                    </div>
+                    <span className="text-fgSubtle font-mono w-5 text-right">{idx + 1}</span>
+                    <span className="truncate">{model}</span>
+                    <div className="ml-auto w-1.5 h-1.5 rounded-full bg-success" />
                   </div>
                 ))
               ) : (
-                <div className="py-10 text-center">
-                  <span className="text-[12px] text-gray-600 italic">Finding models...</span>
-                </div>
+                <div className="py-8 text-center text-xs text-fgSubtle">No models found</div>
               )}
-            </div>
-            
-            <div className="p-3 border-t border-white/[0.1] bg-[#050505] flex items-center justify-between px-4">
-              <span className="text-[10px] text-gray-600 font-mono">{health.models?.length} total units</span>
-              <span className="text-[10px] text-cyan-500/50 font-mono tracking-tighter">OLLAMA_SYSTEM::LIVE</span>
             </div>
           </motion.div>
         )}
@@ -124,23 +101,47 @@ function ConnectionStatus({ health }) {
 export default function Dashboard() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [query, setQuery] = useState('');
-  const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
   const [activeTab, setActiveTab] = useState('chat');
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarPinned, setSidebarPinned] = useState(false);
   const [execMode, setExecMode] = useState('auto');
   const [allowHeavy, setAllowHeavy] = useState(false);
+  const [timelineWidth, setTimelineWidth] = useState(340);
+  const [isResizingTimeline, setIsResizingTimeline] = useState(false);
+  const [canvasFullscreen, setCanvasFullscreen] = useState(false);
   const searchInputRef = React.useRef(null);
 
-  const { nodesState, executionLog, projects } = useAgentStore();
+  const { nodesState, executionLog, projects, canvasRuns, setCanvasRuns, chatSessions, setChatSessions } = useAgentStore();
   const isSystemActive = Object.values(nodesState).some(n => n?.status === 'running');
 
-  // ── Global WebSocket (persists across tab switches) ──
   const wsRef = useRef(null);
   const [wsStatus, setWsStatus] = useState('disconnected');
   const storeRef = useRef({ updateNode: null, addTimelineEvent: null });
   storeRef.current.updateNode = useAgentStore.getState().updateNode;
   storeRef.current.addTimelineEvent = useAgentStore.getState().addTimelineEvent;
+
+  useEffect(() => {
+    if (!isResizingTimeline) return;
+    
+    const handleMouseMove = (e) => {
+      const newWidth = document.body.clientWidth - e.clientX - 16;
+      if (newWidth >= 250 && newWidth <= 800) {
+        setTimelineWidth(newWidth);
+      }
+    };
+    
+    const handleMouseUp = () => {
+      setIsResizingTimeline(false);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingTimeline]);
 
   useEffect(() => {
     let ws;
@@ -169,7 +170,10 @@ export default function Dashboard() {
           if (type === 'start') {
             storeRef.current.updateNode(run_id, node_id, { status: 'running', input: input || '', output: '', error: '' });
           } else if (type === 'update') {
-            storeRef.current.updateNode(run_id, node_id, { output });
+            const existing = useAgentStore.getState().nodesState[node_id];
+            if (existing?.status !== 'success') {
+              storeRef.current.updateNode(run_id, node_id, { output });
+            }
           } else if (type === 'complete') {
             storeRef.current.updateNode(run_id, node_id, { status: 'success', output, metadata: metadata || {} });
           } else if (type === 'error') {
@@ -197,14 +201,14 @@ export default function Dashboard() {
     return () => {
       clearTimeout(reconnectTimer);
       clearInterval(pingTimer);
-      if (ws && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+      if (ws && ws.readyState !== WebSocket.CONNECTING && ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
         ws.onclose = null;
         ws.close();
       }
+      wsRef.current = null;
     };
   }, []);
 
-  // ── Health check polling ──
   const [health, setHealth] = useState({ ollama: 'checking', models: [], backend: 'checking' });
   useEffect(() => {
     const checkHealth = async () => {
@@ -227,13 +231,6 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Clock ──
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date().toLocaleTimeString()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // ── Ctrl+K ──
   useEffect(() => {
     const down = (e) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
@@ -245,7 +242,6 @@ export default function Dashboard() {
     return () => document.removeEventListener('keydown', down);
   }, []);
 
-  // ── Stats ──
   const [sysStats, setSysStats] = useState({ total_runs: 0, success_rate: 0, fix_rate: 0 });
   useEffect(() => {
     const fetchStats = async () => {
@@ -256,6 +252,22 @@ export default function Dashboard() {
     };
     fetchStats();
     const interval = setInterval(fetchStats, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const [canvasRes, chatRes] = await Promise.all([
+          fetch(`${API}/canvas/runs?limit=20`).then(r => r.json()).catch(() => ({ runs: [] })),
+          fetch(`${API}/chat/sessions?limit=20`).then(r => r.json()).catch(() => ({ sessions: [] })),
+        ]);
+        setCanvasRuns(canvasRes.runs || []);
+        setChatSessions(chatRes.sessions || []);
+      } catch (e) { }
+    };
+    loadHistory();
+    const interval = setInterval(loadHistory, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -285,169 +297,119 @@ export default function Dashboard() {
     } catch (e) { }
   };
 
-  const handleClearLogs = async () => {
-    useAgentStore.getState().resetAll();
+  const handleClearLogs = () => {
+    useAgentStore.getState().clearExecutionLog();
   };
 
   const TABS = useMemo(() => [
-    { id: 'chat', icon: <MessageSquare className="w-[18px] h-[18px]" />, label: 'Agent Chat' },
-    { id: 'simple-chat', icon: <MessageCircle className="w-[18px] h-[18px]" />, label: 'Chat' },
-    { id: 'canvas', icon: <Network className="w-[18px] h-[18px]" />, label: 'Canvas' },
-    { id: 'workspace', icon: <FolderTree className="w-[18px] h-[18px]" />, label: 'Files', badge: projects.length || null },
+    { id: 'chat', icon: <MessageSquare className="w-4 h-4" />, label: 'Agent Chat' },
+    { id: 'simple-chat', icon: <MessageCircle className="w-4 h-4" />, label: 'Chat' },
+    { id: 'canvas', icon: <Network className="w-4 h-4" />, label: 'Canvas' },
+    { id: 'workspace', icon: <FolderTree className="w-4 h-4" />, label: 'Files', badge: projects.length || null },
+    { id: 'performance', icon: <BarChart3 className="w-4 h-4" />, label: 'Metrics' },
+    { id: 'custom-agents', icon: <Users className="w-4 h-4" />, label: 'Agents' },
   ], [projects.length]);
 
   const isSidebarVisible = sidebarExpanded || sidebarPinned;
 
   return (
-    <div className="flex h-screen bg-[#050505] text-white relative overflow-hidden font-sans">
-
-      {/* ── Animated Background ── */}
-      <div className="fixed inset-0 -z-10 pointer-events-none">
-        <div className="absolute inset-0 bg-[#050505]" />
-        <motion.div 
-          animate={{ opacity: [0.04, 0.06, 0.04] }}
-          transition={{ duration: 8, repeat: Infinity }}
-          className="absolute inset-0 bg-[radial-gradient(ellipse_at_20%_50%,rgba(0,240,255,0.06)_0,transparent_60%)]" 
-        />
-        <motion.div 
-          animate={{ opacity: [0.03, 0.05, 0.03] }}
-          transition={{ duration: 10, repeat: Infinity }}
-          className="absolute inset-0 bg-[radial-gradient(ellipse_at_80%_20%,rgba(168,85,247,0.05)_0,transparent_60%)]" 
-        />
-        <motion.div 
-          animate={{ opacity: [0.02, 0.04, 0.02] }}
-          transition={{ duration: 12, repeat: Infinity }}
-          className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_80%,rgba(236,72,153,0.04)_0,transparent_60%)]" 
-        />
-        {/* Subtle animated noise overlay */}
-        <div className="absolute inset-0 opacity-[0.015]" style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`,
-        }} />
-        {/* Floating particles */}
-        <div className="absolute inset-0 overflow-hidden">
-          {[...Array(15)].map((_, i) => (
-            <motion.div
-              key={i}
-              className="absolute w-0.5 h-0.5 rounded-full bg-cyan-400/20"
-              style={{
-                left: `${Math.random() * 100}%`,
-                top: `${Math.random() * 100}%`,
-              }}
-              animate={{
-                y: [0, -20, 0],
-                x: [0, Math.random() * 10 - 5, 0],
-                opacity: [0.1, 0.4, 0.1],
-              }}
-              transition={{
-                duration: 3 + Math.random() * 3,
-                repeat: Infinity,
-                delay: Math.random() * 2,
-              }}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* ── SIDEBAR ── */}
+    <div className="flex h-screen bg-gradient-bg-mesh text-fgDefault relative overflow-hidden font-sans">
       <motion.div
-        className="flex flex-col bg-[#080810]/90 backdrop-blur-sm border-r border-white/[0.06] relative z-30 shrink-0"
-        animate={{ width: isSidebarVisible ? 240 : 60 }}
-        transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+        className="flex flex-col glass-strong border-r border-borderDefault/50 relative z-30 shrink-0"
+        animate={{ width: isSidebarVisible ? 220 : 48 }}
+        transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
         onMouseEnter={() => !sidebarPinned && setSidebarExpanded(true)}
         onMouseLeave={() => !sidebarPinned && setSidebarExpanded(false)}
       >
-        {/* Logo */}
-        <div className="flex items-center gap-3 px-4 py-5 border-b border-white/[0.06] min-h-[68px]">
-          <motion.div 
-            whileHover={{ rotate: 360 }}
-            transition={{ duration: 0.5 }}
-            className="p-2 rounded-xl bg-gradient-to-br from-cyan-500/20 to-purple-500/20 border border-white/10 shrink-0 animate-neon-pulse"
+        <div className="flex items-center gap-2.5 px-3 py-3 border-b border-borderDefault/50 min-h-[48px]">
+          <motion.div
+            className="p-1.5 rounded-md bg-canvas/50 border border-borderDefault shrink-0"
+            animate={isSystemActive ? { scale: [1, 1.05, 1] } : {}}
+            transition={{ duration: 2, repeat: Infinity }}
           >
-            <BrainCircuit className="text-cyan-400 w-5 h-5" />
+            <BrainCircuit className="text-accent w-4 h-4" />
           </motion.div>
           <AnimatePresence>
             {isSidebarVisible && (
               <motion.div
-                initial={{ opacity: 0, x: -10 }}
+                initial={{ opacity: 0, x: -8 }}
                 animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                transition={{ duration: 0.2 }}
-                className="flex items-center gap-2 overflow-hidden"
+                exit={{ opacity: 0, x: -8 }}
+                transition={{ duration: 0.15 }}
+                className="overflow-hidden"
               >
-                <h1 className="text-lg font-bold tracking-tight whitespace-nowrap">
-                  Local<span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-purple-500 to-pink-500 animate-gradient-shift bg-[length:200%_200%]">AI</span>
+                <h1 className="text-sm font-semibold text-gradient-accent whitespace-nowrap">
+                  LocalAI
                 </h1>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Navigation */}
-        <div className="flex-1 flex flex-col px-2 py-3 overflow-y-auto custom-scrollbar">
-          <div className="space-y-1 mb-4">
-            {TABS.map((tab, idx) => (
-              <motion.div
+        <div className="flex-1 flex flex-col px-2 py-2 overflow-y-auto">
+          <div className="space-y-0.5 mb-2">
+            {TABS.map((tab) => (
+              <motion.button
                 key={tab.id}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.05 }}
+                onClick={() => setActiveTab(tab.id)}
+                whileHover={{ x: 2 }}
+                whileTap={{ scale: 0.98 }}
+                className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition-all relative ${activeTab === tab.id
+                    ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent font-medium glow-accent'
+                    : 'text-fgMuted hover:text-fgDefault hover:bg-canvas/50'
+                  }`}
+                title={!isSidebarVisible ? tab.label : undefined}
               >
-                <button
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all relative group ${activeTab === tab.id
-                      ? 'bg-white/[0.08] text-white shadow-[0_0_20px_rgba(0,240,255,0.05)]'
-                      : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.04]'
-                    }`}
-                  title={!isSidebarVisible ? tab.label : undefined}
+                <motion.span
+                  className={`shrink-0 ${activeTab === tab.id ? 'text-accent animate-icon-bounce' : ''}`}
+                  animate={activeTab === tab.id ? { filter: 'drop-shadow(0 0 4px rgba(88,166,255,0.4))' } : {}}
                 >
-                  {activeTab === tab.id && (
-                    <motion.div
-                      layoutId="tab-indicator"
-                      className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(0,240,255,0.5)]"
-                    />
+                  {tab.icon}
+                </motion.span>
+                <AnimatePresence>
+                  {isSidebarVisible && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: 'auto' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="whitespace-nowrap overflow-hidden text-xs"
+                    >
+                      {tab.label}
+                      {tab.badge && (
+                        <span className="ml-1.5 bg-accent/15 text-accent text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold">
+                          {tab.badge}
+                        </span>
+                      )}
+                    </motion.span>
                   )}
-                  <span className={`shrink-0 transition-colors ${activeTab === tab.id ? 'text-cyan-400' : 'group-hover:text-cyan-400/60'}`}>
-                    {tab.icon}
-                  </span>
-                  <AnimatePresence>
-                    {isSidebarVisible && (
-                      <motion.span
-                        initial={{ opacity: 0, width: 0 }}
-                        animate={{ opacity: 1, width: 'auto' }}
-                        exit={{ opacity: 0, width: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="whitespace-nowrap overflow-hidden"
-                      >
-                        {tab.label}
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
-                  {tab.badge && isSidebarVisible && (
-                    <span className="ml-auto bg-white/[0.06] text-cyan-400 text-[10px] px-1.5 py-0.5 rounded font-mono">
-                      {tab.badge}
-                    </span>
-                  )}
-                </button>
-              </motion.div>
+                </AnimatePresence>
+                {activeTab === tab.id && (
+                  <motion.div
+                    layoutId="activeTab"
+                    className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-accent rounded-r-full"
+                    transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                  />
+                )}
+              </motion.button>
             ))}
           </div>
         </div>
 
-        {/* Sidebar pin toggle */}
-        <div className="p-2 border-t border-white/[0.04]">
+        <div className="p-2 border-t border-borderDefault/50">
           <button
             onClick={() => setSidebarPinned(!sidebarPinned)}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg hover:bg-white/[0.04] text-gray-600 hover:text-gray-300 transition-colors"
+            className="w-full flex items-center justify-center gap-2 py-1.5 rounded-md hover:bg-canvas/50 text-fgSubtle hover:text-fgDefault transition-colors"
             title={sidebarPinned ? "Unpin sidebar" : "Pin sidebar"}
           >
-            {sidebarPinned ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
+            {sidebarPinned ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeft className="w-3.5 h-3.5" />}
             <AnimatePresence>
               {isSidebarVisible && (
                 <motion.span
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="text-[11px] whitespace-nowrap"
+                  className="text-xs whitespace-nowrap"
                 >
                   {sidebarPinned ? 'Unpin' : 'Pin'}
                 </motion.span>
@@ -457,16 +419,11 @@ export default function Dashboard() {
         </div>
       </motion.div>
 
-      {/* ── MAIN AREA ── */}
       <div className="flex-1 flex flex-col min-w-0">
-
-        {/* Top Bar */}
-        <div className="h-14 border-b border-white/[0.06] flex items-center gap-3 px-5 bg-[#080810]/50 backdrop-blur-sm shrink-0">
-
-          {/* Prompt input */}
-          <div className="flex-1 max-w-3xl flex items-center gap-2">
+        <div className="h-12 border-b border-borderDefault/50 flex items-center gap-3 px-4 glass-strong shrink-0">
+          <div className="flex-1 max-w-2xl flex items-center gap-2">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-600" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fgSubtle" />
               <input
                 ref={searchInputRef}
                 name="command-input"
@@ -476,102 +433,79 @@ export default function Dashboard() {
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleQuery}
                 disabled={isProcessing || isSystemActive}
-                placeholder={isSystemActive ? "Processing..." : "Command Center: run task... (Ctrl + K)"}
-                className="w-full bg-white/[0.03] border border-white/[0.06] rounded-lg py-2 pl-10 pr-16 text-[13px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-cyan-500/30 disabled:opacity-40 transition-all duration-300 shadow-[inset_0_2px_10px_rgba(0,0,0,0.2)]"
+                placeholder={isSystemActive ? "Processing..." : "Run a task... (Ctrl+K)"}
+                className="w-full bg-canvas/50 border border-borderDefault/50 rounded-md py-1.5 pl-9 pr-14 text-sm text-fgDefault placeholder-fgSubtle focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 disabled:opacity-40 transition-all focus:shadow-[0_0_10px_rgba(88,166,255,0.1)]"
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none flex gap-1 items-center">
-                 <span className="text-[9px] font-bold bg-[#111] border border-white/10 text-gray-400 px-1.5 py-0.5 rounded shadow-sm opacity-80 uppercase">Ctrl+K</span>
+              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+                <span className="text-[10px] font-mono bg-canvasSubtle/50 border border-borderDefault/50 text-fgSubtle px-1.5 py-0.5 rounded">Ctrl+K</span>
               </div>
             </div>
 
-            {/* Execution Toggles */}
             <div className="flex items-center gap-1 shrink-0">
-              <div className="flex items-center bg-white/[0.02] border border-white/[0.06] rounded-lg p-0.5 shrink-0">
-                 {['auto', 'direct', 'agent'].map(mode => (
-                   <button
-                     key={mode}
-                     onClick={() => setExecMode(mode)}
-                     className={`px-2.5 py-1.5 text-[10px] font-bold tracking-wider uppercase rounded-md transition-all ${
-                       execMode === mode 
-                         ? 'bg-cyan-500/20 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.1)]' 
-                         : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.05]'
-                     }`}
-                     title={`Run in ${mode} mode`}
-                   >
-                     {mode}
-                   </button>
-                 ))}
+              <div className="flex items-center bg-canvas/50 border border-borderDefault/50 rounded-md p-0.5">
+                {['auto', 'direct', 'agent'].map(mode => (
+                  <motion.button
+                    key={mode}
+                    onClick={() => setExecMode(mode)}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded transition-all ${
+                      execMode === mode
+                        ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent shadow-sm'
+                        : 'text-fgSubtle hover:text-fgDefault hover:bg-canvasSubtle/50'
+                    }`}
+                    title={`Run in ${mode} mode`}
+                  >
+                    {mode}
+                  </motion.button>
+                ))}
               </div>
 
-              <button
-                 onClick={() => setAllowHeavy(!allowHeavy)}
-                 className={`flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold uppercase rounded-lg border transition-all shrink-0 ${
-                   allowHeavy 
-                     ? 'bg-purple-500/10 text-purple-400 border-purple-500/30 shadow-[0_0_10px_rgba(168,85,247,0.1)]' 
-                     : 'bg-white/[0.02] text-gray-500 border-white/[0.06] hover:bg-white/[0.05]'
-                 }`}
-                 title="Allow Heavy Models (e.g. Qwen 35B) — Will unload other models"
+              <motion.button
+                onClick={() => setAllowHeavy(!allowHeavy)}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md border transition-all shrink-0 ${
+                  allowHeavy
+                    ? 'bg-gradient-to-r from-done/15 to-done/5 text-done border-done/20 glow-accent'
+                    : 'bg-canvas/50 text-fgSubtle border-borderDefault/50 hover:bg-canvasSubtle/50'
+                }`}
+                title="Allow Heavy Models"
               >
-                 <BrainCircuit className="w-3.5 h-3.5" />
-                 <span className="hidden xl:inline">{allowHeavy ? 'Deep Think' : 'Fast Mode'}</span>
-              </button>
+                <BrainCircuit className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">{allowHeavy ? 'Deep Think' : 'Fast'}</span>
+              </motion.button>
             </div>
           </div>
 
-          {/* Right controls */}
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-gray-600 font-mono hidden sm:block">{currentTime}</span>
-
-            {/* Connection Status */}
             <ConnectionStatus health={health} />
-            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[10px] font-mono transition-all ${
-              wsStatus === 'connected' ? 'bg-green-500/10 border-green-500/20 text-green-400' :
-              wsStatus === 'connecting' ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-400' :
-              'bg-red-500/10 border-red-500/20 text-red-400'
-            }`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${wsStatus === 'connected' ? 'bg-green-400' : wsStatus === 'connecting' ? 'bg-yellow-400' : 'bg-red-400'} animate-pulse`} />
-              <span className="hidden sm:inline">WS {wsStatus}</span>
-            </div>
 
-            <div className="flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] px-2.5 py-1 rounded-lg text-[10px] font-mono">
-              <span className="text-pink-400">{sysStats.total_runs} runs</span>
-              <span className="text-white/10">|</span>
-              <span className="text-green-400">{sysStats.success_rate}%</span>
-            </div>
-
-            <button
-               onClick={handleClearLogs}
-               className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.06] rounded-lg text-gray-400 hover:text-white text-[11px] font-bold transition-all"
+            <motion.button
+              onClick={handleClearLogs}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className="flex items-center gap-1 px-2 py-1 bg-canvas/50 hover:bg-canvasSubtle/50 border border-borderDefault/50 rounded-md text-fgSubtle hover:text-fgDefault text-xs transition-colors"
             >
-               Clear Logs
-            </button>
+              Clear
+            </motion.button>
 
-            {/* Stop All Agents button - always visible */}
-            <button
+            <motion.button
               onClick={handleStop}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs font-medium transition-all ${
                 isSystemActive
-                  ? 'bg-red-500/10 hover:bg-red-500/20 border-red-500/30 text-red-400 animate-pulse'
-                  : 'bg-white/[0.03] hover:bg-red-500/10 border-white/[0.06] hover:border-red-500/20 text-gray-500 hover:text-red-400'
+                  ? 'bg-gradient-to-r from-danger/15 to-danger/5 hover:from-danger/20 hover:to-danger/10 border-danger/20 text-danger glow-danger'
+                  : 'bg-canvas/50 hover:bg-danger/10 border-borderDefault/50 hover:border-danger/20 text-fgSubtle hover:text-danger'
               }`}
               title="Stop all running agents"
             >
-              <Square className="w-3 h-3 fill-current" /> Stop All
-            </button>
-
-            {/* Status indicator */}
-            <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${
-              isSystemActive
-                ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
-                : 'bg-white/[0.03] border-white/[0.06] text-gray-500'
-            }`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${isSystemActive ? 'bg-cyan-400 animate-pulse' : 'bg-green-400'}`} />
-              {isSystemActive ? 'Running' : 'Idle'}
-            </div>
+              <Square className="w-3 h-3 fill-current" /> Stop
+            </motion.button>
           </div>
         </div>
 
-        {/* Content area with page transitions */}
         <div className="flex-1 flex overflow-hidden">
           <AnimatePresence mode="wait">
             {activeTab === 'chat' && (
@@ -608,11 +542,40 @@ export default function Dashboard() {
                 animate="animate"
                 exit="exit"
                 transition={pageTransition}
-                className="flex-1 flex p-4 gap-4"
+                className="flex-1 flex p-2 h-full gap-2 relative"
               >
-                <AgentCanvas />
-                <TimelinePanel executionLog={executionLog} />
+                <NodeSidebar />
+                <div className="flex-1 min-w-0 pb-1">
+                  <AgentCanvas isFullscreen={canvasFullscreen} setIsFullscreen={setCanvasFullscreen} />
+                </div>
+                
+                {/* Resizer Handle */}
+                <div 
+                  className="w-3 cursor-col-resize hover:bg-accent/10 active:bg-accent/20 transition-colors z-10 flex items-center justify-center group rounded-full"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setIsResizingTimeline(true);
+                  }}
+                >
+                  <div className={`w-[2px] h-12 rounded-full transition-colors ${isResizingTimeline ? 'bg-accent' : 'bg-[#30363d] group-hover:bg-[#58a6ff]'}`} />
+                </div>
+
+                <div style={{ width: timelineWidth }} className="shrink-0 flex flex-col pb-1">
+                  <TimelinePanel executionLog={executionLog} />
+                </div>
+                
+                {isResizingTimeline && <div className="fixed inset-0 z-50 cursor-col-resize" />}
               </motion.div>
+            )}
+
+            {/* Fullscreen Canvas Overlay */}
+            {canvasFullscreen && (
+              <div className="fixed inset-0 z-[100] bg-[#0d1117] flex p-2 gap-2">
+                <NodeSidebar />
+                <div className="flex-1 min-w-0">
+                  <AgentCanvas isFullscreen={canvasFullscreen} setIsFullscreen={setCanvasFullscreen} />
+                </div>
+              </div>
             )}
             {activeTab === 'workspace' && (
               <motion.div
@@ -627,8 +590,36 @@ export default function Dashboard() {
                 <WorkspaceExplorer />
               </motion.div>
             )}
+            {activeTab === 'performance' && (
+              <motion.div
+                key="performance"
+                variants={pageVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={pageTransition}
+                className="flex-1 flex"
+              >
+                <PerformanceDashboard />
+              </motion.div>
+            )}
+            {activeTab === 'custom-agents' && (
+              <motion.div
+                key="custom-agents"
+                variants={pageVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={pageTransition}
+                className="flex-1 flex"
+              >
+                <CustomAgentManager />
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
+
+        <StatusBar health={health} wsStatus={wsStatus} sysStats={sysStats} isSystemActive={isSystemActive} />
       </div>
     </div>
   );

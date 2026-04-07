@@ -8,7 +8,7 @@ Each agent has ONE file with both pipeline and chat sections.
 from functools import lru_cache
 from pathlib import Path
 
-PROMPTS_ROOT = Path(__file__).resolve().parents[2] / "prompts"
+PROMPTS_ROOT = Path(__file__).resolve().parents[3] / "prompts"
 
 
 @lru_cache(maxsize=None)
@@ -20,7 +20,12 @@ def _load(agent: str, section: str) -> str:
     parts = raw.split(marker, 1)
     if len(parts) < 2:
         raise FileNotFoundError(f"Section '{section}' not found in {path}")
-    return parts[1].strip()
+    content = parts[1].strip()
+    # Stop at the next ## heading to avoid leaking other sections
+    next_section = content.find("\n## ")
+    if next_section != -1:
+        content = content[:next_section].strip()
+    return content
 
 
 # ── Manager ──

@@ -381,6 +381,17 @@ async def scheduled_generate(model: str, prompt: str, stream: bool = True):
             if info["is_heavy"]:
                 logger.info(f"🔒 Auto-releasing heavy model '{model}' after execution")
                 await release_model(model)
+            # Step 4: Sample VRAM state for metrics
+            try:
+                from services.metrics import record_vram_sample
+                state = vram_state
+                record_vram_sample(
+                    total_gb=state.total_gb,
+                    used_gb=state.used_gb,
+                    active_models=list(state.active_models.keys())
+                )
+            except Exception:
+                pass
 
 
 async def scheduled_generate_sync(model: str, prompt: str) -> str:

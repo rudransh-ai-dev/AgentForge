@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useAgentStore } from '../store/useAgentStore';
 import {
   FolderOpen, File, RefreshCw, X, Play, Trash2, Save,
-  Edit3, ChevronRight, ChevronDown, Package, Zap, AlertCircle, CheckCircle
+  Edit3, ChevronRight, ChevronDown, Package, AlertCircle, CheckCircle, Download, Upload, GitCompare
 } from 'lucide-react';
+import CodeDiffViewer from './CodeDiffViewer';
 
-const API = "http://127.0.0.1:8888";
+const API = "";
 
 export default function WorkspaceExplorer() {
   const {
@@ -21,6 +21,7 @@ export default function WorkspaceExplorer() {
   const [expandedProjects, setExpandedProjects] = useState({});
   const [runOutput, setRunOutput] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [showDiffs, setShowDiffs] = useState(false);
 
   const fetchProjects = async () => {
     try {
@@ -100,6 +101,38 @@ export default function WorkspaceExplorer() {
     }
   };
 
+  const exportProject = async (projectId) => {
+    try {
+      const res = await fetch(`${API}/workspace/export/${projectId}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${projectId}.zip`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Failed to export project", e);
+    }
+  };
+
+  const importProject = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      await fetch(`${API}/workspace/import`, {
+        method: "POST",
+        body: formData,
+      });
+      fetchProjects();
+    } catch (err) {
+      console.error("Failed to import project", err);
+    }
+    e.target.value = '';
+  };
+
   const toggleProject = (pid) => {
     setExpandedProjects(prev => ({ ...prev, [pid]: !prev[pid] }));
   };
@@ -120,211 +153,227 @@ export default function WorkspaceExplorer() {
     return '📄';
   };
 
+  const getLanguage = (proj) => {
+    if (!proj.files) return null;
+    if (proj.files.some(f => f.endsWith('.py'))) return 'Python';
+    if (proj.files.some(f => f.endsWith('.js') || f.endsWith('.jsx') || f.endsWith('.ts'))) return 'Node.js';
+    if (proj.files.some(f => f.endsWith('.go'))) return 'Go';
+    if (proj.files.some(f => f.endsWith('.rs'))) return 'Rust';
+    if (proj.files.some(f => f.endsWith('.sh'))) return 'Bash';
+    return null;
+  };
+
+  const langColors = {
+    'Python': 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+    'Node.js': 'bg-green-500/10 text-green-400 border-green-500/20',
+    'Go': 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+    'Rust': 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+    'Bash': 'bg-gray-500/10 text-gray-400 border-gray-500/20',
+  };
+
   return (
-    <div className="flex-1 h-full flex font-mono">
-      {/* FILE TREE PANEL */}
-      <div className="w-72 h-full flex flex-col glass-panel border-r border-white/5 bg-black/40 overflow-hidden relative">
-        {/* Top accent */}
-        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-purple-400/50 to-transparent" />
-        
-        <div className="p-4 border-b border-white/10 flex items-center justify-between text-xs tracking-widest text-gray-500 uppercase font-bold bg-white/[0.02]">
-          <div className="flex items-center gap-2">
-            <FolderOpen className="w-4 h-4 text-cyan-400" /> Workspace
+    <div className="flex-1 h-full flex">
+      <div className="w-64 h-full flex flex-col glass-strong border-r border-borderDefault/50 overflow-hidden">
+        <div className="px-3 py-2 border-b border-borderDefault/50 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs font-medium text-fgDefault">
+            <FolderOpen className="w-3.5 h-3.5 text-fgMuted" /> Workspace
           </div>
-          <motion.button 
-            whileHover={{ rotate: 180 }}
-            transition={{ duration: 0.3 }}
-            onClick={fetchProjects} 
-            className="hover:text-cyan-400 transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-          </motion.button>
+          <div className="flex items-center gap-1">
+            <label className="p-1 rounded hover:bg-canvas/50 text-fgSubtle hover:text-fgDefault transition-colors cursor-pointer" title="Import project">
+              <Upload className="w-3.5 h-3.5" />
+              <input type="file" accept=".zip" onChange={importProject} className="hidden" />
+            </label>
+            <button
+              onClick={fetchProjects}
+              className="p-1 rounded hover:bg-canvas/50 text-fgSubtle hover:text-fgDefault transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
           {projects.length === 0 ? (
-            <div className="text-[10px] text-gray-600 text-center py-10 italic">
+            <div className="text-xs text-fgSubtle text-center py-10">
               Workspace empty.<br/>Ask the Coder to generate a project.
             </div>
           ) : (
-            projects.map((proj, idx) => (
-              <motion.div 
-                key={proj.project_id}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.05 }}
-              >
-                {/* Project Header */}
-                <div
-                  onClick={() => toggleProject(proj.project_id)}
-                  className="flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-white/5 text-[11px] text-gray-300 group"
-                >
-                  {expandedProjects[proj.project_id] ?
-                    <ChevronDown className="w-3 h-3 text-gray-500" /> :
-                    <ChevronRight className="w-3 h-3 text-gray-500" />
-                  }
-                  <Package className="w-3.5 h-3.5 text-purple-400" />
-                  <span className="font-bold truncate flex-1">{proj.project_id}</span>
-
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); runProject(proj.project_id); }}
-                      className="p-1 rounded hover:bg-green-500/20 text-green-400"
-                      title="Run Project"
-                    >
-                      <Play className="w-3 h-3" />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); runProject(proj.project_id, true); }}
-                      className="p-1 rounded hover:bg-amber-500/20 text-amber-400"
-                      title="Run + Auto-Fix"
-                    >
-                      <Zap className="w-3 h-3" />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteProject(proj.project_id); }}
-                      className="p-1 rounded hover:bg-red-500/20 text-red-400"
-                      title="Delete Project"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* File List */}
-                {expandedProjects[proj.project_id] && (
-                  <div className="ml-4 pl-3 border-l border-white/5 space-y-0.5">
-                    {proj.files.map(file => (
-                      <div
-                        key={file}
-                        className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-[10px] group/file transition-all ${
-                          selectedFile === file && selectedProject === proj.project_id
-                            ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                            : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                        }`}
-                      >
-                        <span
-                          onClick={() => fetchFile(proj.project_id, file)}
-                          className="flex items-center gap-2 flex-1 truncate"
-                        >
-                          <span>{getFileIcon(file)}</span>
-                          <span className="truncate">{file}</span>
-                        </span>
-                        <button
-                          onClick={() => deleteFile(proj.project_id, file)}
-                          className="opacity-0 group-hover/file:opacity-100 text-red-400 hover:text-red-300 transition-opacity"
-                        >
-                          <Trash2 className="w-2.5 h-2.5" />
-                        </button>
-                      </div>
-                    ))}
-
-                    {/* Project Meta */}
-                    {proj.meta?.entry_point && (
-                      <div className="text-[9px] text-gray-600 px-2 py-1 mt-1 border-t border-white/5">
-                        Entry: <span className="text-gray-400">{proj.meta.entry_point}</span>
-                        {proj.meta.dependencies?.length > 0 && (
-                          <div className="mt-0.5">Deps: <span className="text-purple-400">{proj.meta.dependencies.join(', ')}</span></div>
-                        )}
-                      </div>
+            projects.map((proj) => {
+              const lang = getLanguage(proj);
+              return (
+                <div key={proj.project_id}>
+                  <div
+                    onClick={() => toggleProject(proj.project_id)}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer hover:bg-canvas/50 text-xs text-fgDefault group"
+                  >
+                    {expandedProjects[proj.project_id] ?
+                      <ChevronDown className="w-3 h-3 text-fgSubtle" /> :
+                      <ChevronRight className="w-3 h-3 text-fgSubtle" />
+                    }
+                    <Package className="w-3.5 h-3.5 text-fgMuted" />
+                    <span className="font-medium truncate flex-1">{proj.project_id}</span>
+                    {lang && (
+                      <span className={`text-[9px] px-1 py-0 rounded border ${langColors[lang] || ''}`}>{lang}</span>
                     )}
+
+                    <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setShowDiffs(true); setSelectedProject(proj.project_id); }}
+                        className="p-0.5 rounded hover:bg-canvas/50 text-fgSubtle hover:text-accent"
+                        title="View Diffs"
+                      >
+                        <GitCompare className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); exportProject(proj.project_id); }}
+                        className="p-0.5 rounded hover:bg-canvas/50 text-fgSubtle hover:text-fgDefault"
+                        title="Export as zip"
+                      >
+                        <Download className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); runProject(proj.project_id); }}
+                        className="p-0.5 rounded hover:bg-success/10 text-fgSubtle hover:text-success"
+                        title="Run Project"
+                      >
+                        <Play className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteProject(proj.project_id); }}
+                        className="p-0.5 rounded hover:bg-danger/10 text-fgSubtle hover:text-danger"
+                        title="Delete Project"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
-                )}
-              </motion.div>
-            ))
+
+                  {expandedProjects[proj.project_id] && (
+                    <div className="ml-4 pl-2 border-l border-borderDefault/50 space-y-0">
+                      {proj.files.map(file => (
+                        <div
+                          key={file}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-xs group/file ${
+                            selectedFile === file && selectedProject === proj.project_id
+                              ? 'bg-accent/10 text-accent'
+                              : 'text-fgMuted hover:bg-canvas/50 hover:text-fgDefault'
+                          }`}
+                        >
+                          <span
+                            onClick={() => fetchFile(proj.project_id, file)}
+                            className="flex items-center gap-1.5 flex-1 truncate"
+                          >
+                            <File className="w-3 h-3 shrink-0" />
+                            <span className="truncate">{file}</span>
+                          </span>
+                          <button
+                            onClick={() => deleteFile(proj.project_id, file)}
+                            className="opacity-0 group-hover/file:opacity-100 text-fgSubtle hover:text-danger transition-opacity"
+                          >
+                            <Trash2 className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      ))}
+
+                      {proj.meta?.entry_point && (
+                        <div className="text-[10px] text-fgSubtle px-2 py-1.5 mt-1 border-t border-borderDefault/50">
+                          Entry: <span className="text-fgMuted font-mono">{proj.meta.entry_point}</span>
+                          {proj.meta.dependencies?.length > 0 && (
+                            <div className="mt-0.5">Deps: <span className="text-fgMuted">{proj.meta.dependencies.join(', ')}</span></div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
       </div>
 
-      {/* FILE CONTENT / EDITOR PANEL */}
-      <div className="flex-1 flex flex-col bg-[#070709] border-l border-white/5">
+      <div className="flex-1 flex flex-col bg-canvas/50">
         {selectedFile ? (
           <>
-            {/* File Header Bar */}
-            <div className="h-12 border-b border-white/10 flex items-center justify-between px-4 bg-black/50">
-              <div className="flex items-center gap-3">
-                <span className="text-[11px]">{getFileIcon(selectedFile)}</span>
-                <span className="text-[12px] text-cyan-100 font-bold tracking-wider">{selectedFile}</span>
-                <span className="text-[9px] text-gray-600">({selectedProject})</span>
-              </div>
+            <div className="h-10 border-b border-borderDefault/50 flex items-center justify-between px-4 glass-strong">
               <div className="flex items-center gap-2">
+                <span className="text-xs">{getFileIcon(selectedFile)}</span>
+                <span className="text-xs font-medium text-fgDefault">{selectedFile}</span>
+                <span className="text-[10px] text-fgSubtle">({selectedProject})</span>
+              </div>
+              <div className="flex items-center gap-1.5">
                 {isEditing ? (
                   <>
-                    <button
-                      onClick={saveFile}
-                      className="flex items-center gap-1.5 px-2.5 py-1 bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/20 rounded text-[10px] font-bold"
-                    >
+                    <button onClick={saveFile} className="btn-primary text-xs px-2 py-1">
                       <Save className="w-3 h-3" /> Save
                     </button>
                     <button
                       onClick={() => { setIsEditing(false); setEditContent(fileContent); }}
-                      className="text-gray-500 hover:text-white text-[10px] px-2 py-1"
+                      className="btn-secondary text-xs px-2 py-1"
                     >Cancel</button>
                   </>
                 ) : (
                   <button
                     onClick={() => setIsEditing(true)}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 hover:bg-white/10 text-gray-300 border border-white/10 rounded text-[10px]"
+                    className="btn-secondary text-xs px-2 py-1"
                   >
                     <Edit3 className="w-3 h-3" /> Edit
                   </button>
                 )}
-                <button onClick={() => setSelectedFile(null)} className="text-gray-500 hover:text-white ml-2">
+                <button onClick={() => setSelectedFile(null)} className="text-fgSubtle hover:text-fgDefault ml-1">
                   <X className="w-4 h-4" />
                 </button>
               </div>
             </div>
 
-            {/* File Content */}
-            <div className="flex-1 overflow-auto custom-scrollbar p-0">
+            <div className="flex-1 overflow-auto p-4">
               {isEditing ? (
                 <textarea
                   value={editContent}
                   onChange={(e) => setEditContent(e.target.value)}
-                  className="w-full h-full bg-transparent text-[12px] text-cyan-50/90 font-mono leading-relaxed p-6 resize-none focus:outline-none"
+                  className="w-full h-full bg-transparent text-sm text-fgDefault font-mono leading-relaxed resize-none focus:outline-none"
                   spellCheck={false}
                 />
               ) : (
-                <pre className="text-[12px] text-cyan-50/80 font-mono leading-relaxed p-6 select-text whitespace-pre-wrap">
+                <pre className="text-sm text-fgDefault font-mono leading-relaxed whitespace-pre-wrap select-text">
                   {fileContent}
                 </pre>
               )}
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-600">
-            <div className="text-center space-y-4">
-              <File className="w-12 h-12 mx-auto opacity-20" />
+          <div className="flex-1 flex items-center justify-center text-fgSubtle">
+            <div className="text-center space-y-3">
+              <File className="w-10 h-10 mx-auto opacity-20" />
               <p className="text-sm">Select a file to view or edit</p>
-              <p className="text-[10px] text-gray-700">Or run a prompt to generate a project</p>
             </div>
           </div>
         )}
 
-        {/* Execution Output Panel */}
         {runOutput && (
-          <div className={`h-48 border-t flex flex-col overflow-hidden ${
-            runOutput.status === 'success' ? 'border-green-500/30' :
-            runOutput.status === 'error' ? 'border-red-500/30' :
-            'border-cyan-500/30'
+          <div className={`border-t flex flex-col overflow-hidden ${
+            runOutput.status === 'success' ? 'border-success/20' :
+            runOutput.status === 'error' ? 'border-danger/20' :
+            'border-borderDefault/50'
           }`}>
-            <div className="h-8 flex items-center justify-between px-4 bg-black/60 border-b border-white/5">
-              <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest">
+            <div className="h-8 flex items-center justify-between px-3 glass border-b border-borderDefault/50">
+              <div className="flex items-center gap-1.5 text-xs font-medium">
                 {runOutput.status === 'success' ? (
-                  <><CheckCircle className="w-3.5 h-3.5 text-green-400" /><span className="text-green-400">Execution Success</span></>
+                  <><CheckCircle className="w-3.5 h-3.5 text-success" /><span className="text-success">Success</span></>
                 ) : runOutput.status === 'running' ? (
-                  <><Play className="w-3.5 h-3.5 text-cyan-400 animate-pulse" /><span className="text-cyan-400">Running...</span></>
+                  <><Play className="w-3.5 h-3.5 text-accent animate-pulse" /><span className="text-accent">Running...</span></>
                 ) : (
-                  <><AlertCircle className="w-3.5 h-3.5 text-red-400" /><span className="text-red-400">Execution Failed</span></>
+                  <><AlertCircle className="w-3.5 h-3.5 text-danger" /><span className="text-danger">Failed</span></>
                 )}
               </div>
-              <button onClick={() => setRunOutput(null)} className="text-gray-500 hover:text-white">
+              <button onClick={() => setRunOutput(null)} className="text-fgSubtle hover:text-fgDefault">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="flex-1 p-3 overflow-auto custom-scrollbar">
-              <pre className={`text-[11px] font-mono whitespace-pre-wrap ${
-                runOutput.status === 'success' ? 'text-green-300/80' : 'text-red-300/80'
+            <div className="h-40 p-3 overflow-auto">
+              <pre className={`text-xs font-mono whitespace-pre-wrap ${
+                runOutput.status === 'success' ? 'text-success' : 'text-danger'
               }`}>
                 {runOutput.output || runOutput.errors || JSON.stringify(runOutput, null, 2)}
               </pre>
@@ -332,6 +381,12 @@ export default function WorkspaceExplorer() {
           </div>
         )}
       </div>
+
+      {showDiffs && selectedProject && (
+        <div className="absolute inset-0 z-50 bg-canvas">
+          <CodeDiffViewer projectId={selectedProject} onClose={() => setShowDiffs(false)} />
+        </div>
+      )}
     </div>
   );
 }

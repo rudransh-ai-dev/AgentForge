@@ -34,6 +34,8 @@ from agents.tool import run_tool_agent_async, execute_project_async, autofix_loo
 from services.event_emitter import emitter
 from services.logger import log_pipeline_start, log_pipeline_end, log_agent_execution
 from core.memory import store_run, update_pattern
+from core.canvas_memory import create_run, update_run, add_step, update_step
+from services.metrics import record_run
 from core.session import get_session, add_turn, update_session, create_session
 from core.context import compress_context, build_context_window
 from core.prompts import (
@@ -155,6 +157,30 @@ async def run_direct_mode(
             "implement",
             "debug",
             "fix",
+            "python",
+            "javascript",
+            "java",
+            "c++",
+            "c#",
+            "ruby",
+            "go ",
+            "rust",
+            "typescript",
+            "swift",
+            "kotlin",
+            "php",
+            "html",
+            "css",
+            "sql",
+            "bash",
+            "shell",
+            "hello world",
+            "print(",
+            "def ",
+            "import ",
+            "const ",
+            "let ",
+            "func ",
         ]
     )
     agent = "coder" if is_code else "analyst"
@@ -218,6 +244,11 @@ async def run_direct_mode(
     total_latency = int((time.time() - start_time) * 1000)
     store_run(run_id, prompt, agent, result[:3000], "", "success", total_latency)
     update_pattern(prompt, agent, True)
+    create_run(run_id, prompt, mode="direct", allow_heavy=False)
+    add_step(run_id, 0, agent, prompt[:5000], model)
+    update_step(run_id, agent, status="success", output=result[:10000], latency_ms=total_latency)
+    update_run(run_id, status="success", total_latency_ms=total_latency)
+    record_run(run_id, "direct", "direct", model, total_latency, len(result), "success", session_id or "")
     log_pipeline_end(run_id, "success", total_latency)
 
     return ExecutionResult(
@@ -251,6 +282,9 @@ async def run_agent_mode(
     start_time = time.time()
 
     log_pipeline_start(run_id, "agent", prompt)
+    create_run(run_id, prompt, mode="agent", allow_heavy=allow_heavy)
+    add_step(run_id, 0, "manager", prompt[:5000], 
+        MODELS["manager"]["name"] if isinstance(MODELS["manager"], dict) else MODELS["manager"])
 
     # Build context from session
     context_prompt = prompt
@@ -400,6 +434,9 @@ async def run_agent_mode(
             step.result = step_result[:3000]
             step.latency_ms = step_latency
             steps_completed += 1
+
+            add_step(run_id, i + 1, step_agent, step.description[:5000], model)
+            update_step(run_id, step_agent, status="success", output=step_result[:10000], latency_ms=step_latency, tokens=len(step_result))
 
             await emitter.emit(
                 run_id,
@@ -879,6 +916,10 @@ async def run_agent_mode(
         total_latency,
     )
     update_pattern(prompt, route, steps_completed > 0)
+    update_run(run_id, status="success" if steps_completed > 0 else "error", total_latency_ms=total_latency)
+    record_run(run_id, "agent", route, 
+        MODELS.get(route, {}).get("name", route) if isinstance(MODELS.get(route), dict) else MODELS.get(route, route),
+        total_latency, len(final_result), "success" if steps_completed > 0 else "error", session_id or "")
 
     log_pipeline_end(run_id, "success", total_latency, steps_completed)
 

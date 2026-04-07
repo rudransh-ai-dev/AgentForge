@@ -16,7 +16,19 @@ function App() {
       </div>
     )}>
       {hasEntered ? (
-        <Dashboard />
+        <div className="flex flex-col h-screen">
+          <div className="h-8 bg-canvasSubtle border-b border-borderDefault/50 flex items-center justify-between px-3 shrink-0">
+            <div className="flex items-center gap-1">
+              <span className="px-2 py-0.5 rounded text-[10px] font-medium text-accent">
+                Dashboard
+              </span>
+            </div>
+            <span className="text-[9px] text-fgSubtle">v3.1</span>
+          </div>
+          <div className="flex-1 min-h-0">
+            <Dashboard />
+          </div>
+        </div>
       ) : (
         <LandingPage onEnter={() => setHasEntered(true)} />
       )}

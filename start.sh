@@ -53,7 +53,13 @@ stop_all() {
 start_backend() {
     echo -e "${CYAN}🌐 Starting Backend on port $BACKEND_PORT...${NC}"
 
-    if ! python3 -c "import fastapi" 2>/dev/null; then
+    if [ -d "$PROJECT_DIR/.venv" ]; then
+        source "$PROJECT_DIR/.venv/bin/activate"
+    elif [ -d "$BACKEND_DIR/.venv" ]; then
+        source "$BACKEND_DIR/.venv/bin/activate"
+    fi
+
+    if ! python3 -c "import fastapi, mcp" 2>/dev/null; then
         echo -e "${YELLOW}⚠ Installing backend dependencies...${NC}"
         pip3 install -r "$BACKEND_DIR/requirements.txt" || {
             echo -e "${RED}✗ Failed to install backend dependencies${NC}"

@@ -1,32 +1,46 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Handle, Position } from '@xyflow/react';
-import { Activity, Clock, FileCode2, Cpu, FileWarning, Send, Zap } from 'lucide-react';
+import { Handle, Position, useReactFlow } from '@xyflow/react';
+import {
+  Activity, Clock, FileCode2, Cpu, FileWarning, Send, Zap,
+  Minus, Trash2, Maximize2, Settings2, X, Check, ChevronDown
+} from 'lucide-react';
+import { useAgentStore } from '../store/useAgentStore';
 
 export default function CustomNode({ id, data }) {
-  const { label, stateData } = data;
+  const { label, stateData: nodeStateData } = data;
+  const { nodesState } = useAgentStore();
   const [nodePrompt, setNodePrompt] = useState('');
   const [isPrompting, setIsPrompting] = useState(false);
-  
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [configLabel, setConfigLabel] = useState(label);
+  const [configSystemPrompt, setConfigSystemPrompt] = useState(data.systemPrompt || '');
+  const [configModel, setConfigModel] = useState(data.model || '');
+  const { deleteElements, setNodes } = useReactFlow();
+  const { availableModels } = useAgentStore();
+
+  // Prefer store state over node data for live updates
+  const storeState = nodesState[id];
+  const stateData = storeState || nodeStateData || { status: 'idle', input: '', output: '', error: '', metadata: {} };
+
   const statusColors = {
-     idle: 'border-white/10 text-gray-400 bg-[#0a0a0f]',
-     running: 'border-cyan-400 shadow-[0_0_25px_rgba(0,240,255,0.25)] text-cyan-400 bg-black/60',
-     success: 'border-green-400 shadow-[0_0_20px_rgba(34,197,94,0.2)] text-green-400 bg-black/50',
-     error: 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.25)] text-red-500 bg-black/50'
+    idle: 'border-[#30363d]/80 text-[#8b949e] bg-[#0d1117]/90',
+    running: 'border-[#58a6ff]/60 text-[#58a6ff] bg-[#0d1117]/90 shadow-[0_0_15px_rgba(88,166,255,0.2)]',
+    success: 'border-[#3fb950]/60 text-[#3fb950] bg-[#0d1117]/90 shadow-[0_0_15px_rgba(63,185,80,0.2)]',
+    error: 'border-[#f85149]/60 text-[#f85149] bg-[#0d1117]/90 shadow-[0_0_15px_rgba(248,81,73,0.2)]'
   };
 
   const currentStatus = stateData?.status || 'idle';
-  const isManager = label.toLowerCase().includes('manager');
-  const isInputNode = label.toLowerCase().includes('request');
+  const isInputNode = label.toLowerCase().includes('input');
 
   const handlePrompt = async (e) => {
     if ((e.key === 'Enter' || e.type === 'click') && nodePrompt.trim() !== '') {
       setIsPrompting(true);
       try {
-        await fetch("http://127.0.0.1:8888/run-node", {
+        await fetch("/run-node", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent_id: id, prompt: nodePrompt })
+          body: JSON.stringify({ agent_id: id, prompt: nodePrompt, model: configModel || undefined, system_prompt: configSystemPrompt || undefined })
         });
         setNodePrompt('');
       } catch (err) {
@@ -37,129 +51,202 @@ export default function CustomNode({ id, data }) {
     }
   };
 
+  const saveConfig = () => {
+    setNodes(nds => nds.map(n => n.id === id
+      ? { ...n, data: { ...n.data, label: configLabel, model: configModel, systemPrompt: configSystemPrompt } }
+      : n
+    ));
+    setShowConfig(false);
+  };
+
   return (
-    <div className={`p-4 rounded-xl border-2 w-72 transition-all duration-300 relative group ${isManager ? 'hover:scale-105 hover:shadow-[0_0_50px_rgba(0,240,255,0.5)] z-50' : 'hover:scale-[1.02]'} ${statusColors[currentStatus]}`}>
-      
-      {/* Dynamic AI Core Effect for Manager Node */}
-      {isManager && (
-         <div className="absolute inset-0 pointer-events-none -z-10 overflow-visible flex items-center justify-center">
-            {/* Pulsing Core Glow */}
-            <div className={`absolute w-full h-full rounded-xl transition-all duration-700 ${currentStatus === 'running' ? 'bg-cyan-500/25 blur-xl animate-pulse scale-125' : currentStatus === 'error' ? 'bg-red-500/25 blur-xl animate-pulse scale-110' : 'bg-cyan-500/5 blur-lg scale-100'}`} />
-            
-            {/* Orbiting Ring 1 */}
-            <div className={`absolute w-[140%] h-[140%] rounded-full border border-white/5 border-t-cyan-400/30 border-b-purple-400/30 ${currentStatus === 'running' ? 'opacity-100 animate-[spin_3s_linear_infinite]' : 'opacity-30 animate-[spin_10s_linear_infinite]'}`} />
-            
-            {/* Orbiting Ring 2 (Counter Spin) */}
-            <div className={`absolute w-[160%] h-[160%] rounded-full border border-white/5 border-l-cyan-400/20 border-r-pink-400/20 ${currentStatus === 'running' ? 'opacity-100 animate-[spin_4s_linear_infinite_reverse]' : 'opacity-20 animate-[spin_15s_linear_infinite_reverse]'}`} />
-            
-            {/* Orbiting Ring 3 */}
-            <div className={`absolute w-[180%] h-[180%] rounded-full border border-white/5 border-t-purple-400/10 border-b-cyan-400/10 ${currentStatus === 'running' ? 'opacity-80 animate-[spin_5s_linear_infinite]' : 'opacity-10 animate-[spin_20s_linear_infinite]'}`} />
-         </div>
-      )}
-      
-      {/* Status indicator dot for non-manager nodes */}
-      {!isManager && currentStatus !== 'idle' && (
-        <div className="absolute -top-1 -right-1">
-          <motion.div 
-            className={`w-2.5 h-2.5 rounded-full ${
-              currentStatus === 'running' ? 'bg-cyan-400 shadow-[0_0_10px_rgba(0,240,255,0.8)]' :
-              currentStatus === 'success' ? 'bg-green-400 shadow-[0_0_10px_rgba(34,197,94,0.8)]' :
-              'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'
-            }`}
-            animate={{ scale: [1, 1.3, 1] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-          />
+    <div className={`rounded-lg border w-64 transition-all duration-300 relative group backdrop-blur-md futuristic-node ${statusColors[currentStatus]}`}>
+
+      {/* Status dot */}
+      {currentStatus !== 'idle' && (
+        <div className="absolute -top-1.5 -right-1.5 z-10">
+          <div className={`w-3 h-3 rounded-full border-2 border-[#0d1117] ${
+            currentStatus === 'running' ? 'bg-[#58a6ff] shadow-[0_0_8px_rgba(88,166,255,0.8)] animate-pulse' :
+            currentStatus === 'success' ? 'bg-[#3fb950] shadow-[0_0_8px_rgba(63,185,80,0.8)]' :
+            'bg-[#f85149] shadow-[0_0_8px_rgba(248,81,73,0.8)]'
+          }`} />
         </div>
       )}
-      
-      {/* Input Handle */}
-      {label !== 'User Request' && <Handle type="target" position={Position.Left} className="w-2.5 h-6 rounded-sm bg-gray-500 border-none -ml-1 transition-all group-hover:bg-cyan-400 opacity-60 hover:opacity-100" />}
-      
-      {/* Node Header */}
-      <div className="font-bold uppercase tracking-[0.2em] text-[9px] flex justify-between items-center mb-3">
-         <span className="flex items-center gap-1.5">
-           {isManager ? <Cpu className="w-3.5 h-3.5" /> : <FileCode2 className="w-3.5 h-3.5" />} 
-           {label}
-         </span>
-         
-         <div className={`px-2 py-0.5 rounded-full border flex items-center gap-1 ${
-           currentStatus === 'running' ? 'bg-cyan-500/10 border-cyan-500/30' : 
-           currentStatus === 'success' ? 'bg-green-500/10 border-green-500/30' :
-           currentStatus === 'error' ? 'bg-red-500/10 border-red-500/30' :
-           'bg-white/5 border-white/10'
-         }`}>
-           {currentStatus === 'running' ? <Activity className="w-3 h-3 animate-spin" /> : 
-            currentStatus === 'success' ? <Zap className="w-3 h-3" /> :
-            currentStatus}
-         </div>
-      </div>
 
-      <div className="space-y-2">
-        {/* State Preview (Output or Input) */}
-        {stateData && stateData.status !== 'idle' && (
-          <div className="relative bg-[#050505] inset-shadow-sm p-2.5 rounded border border-white/5 text-[10px] font-mono text-gray-300 h-28 overflow-y-auto w-full custom-scrollbar">
-              
-              {stateData.error ? (
-                  <div className="text-red-400 flex items-start gap-2">
-                     <FileWarning className="w-4 h-4 mt-0.5 shrink-0" />
-                     <span className="break-all">{stateData.error}</span>
-                  </div>
-              ) : stateData.output ? (
-                  isManager && typeof stateData.output === 'string' && stateData.output.startsWith('{') ? (
-                      <pre className="text-cyan-200/90 whitespace-pre-wrap font-mono text-[9px]">
-                        {(() => {
-                            try { return JSON.stringify(JSON.parse(stateData.output), null, 2); }
-                            catch(e) { return stateData.output; }
-                        })()}
-                      </pre>
-                  ) : (
-                      <span className="whitespace-pre-wrap break-words">{stateData.output}</span>
-                  )
-              ) : (
-                  <div className="text-gray-500 flex items-center justify-center h-full animate-pulse">
-                    Processing matrix...
-                  </div>
-              )}
-          </div>
-        )}
+      {/* Handles */}
+      {!isInputNode && <Handle type="target" position={Position.Left} className="!w-2.5 !h-2.5 !rounded-full !bg-[#30363d] !border-2 !border-[#21262d] group-hover:!bg-[#58a6ff] !transition-all" />}
+      <Handle type="source" position={Position.Right} className="!w-2.5 !h-2.5 !rounded-full !bg-[#30363d] !border-2 !border-[#21262d] group-hover:!bg-[#58a6ff] !transition-all" />
 
-        {/* Metrics Footer */}
-        {stateData?.metadata?.latency_ms && (
-          <div className="flex justify-between items-center text-[10px] text-gray-500 font-mono bg-white/5 px-2 py-1.5 rounded-md border border-white/5 mt-2">
-              <span className="flex items-center gap-1">
-                 <Clock className="w-3 h-3" />
-                 {stateData.metadata.latency_ms}ms
-              </span>
-              <span>
-                 {stateData.metadata.tokens ? `${stateData.metadata.tokens} tokens` : '0 tokens'}
-              </span>
-          </div>
-        )}
-      </div>
+      {/* Header */}
+      <div className={`flex items-center gap-2 px-3 py-2 border-b ${isMinimized ? 'border-transparent' : 'border-[#21262d]'}`}>
+        <div className={`p-1 rounded shrink-0 ${
+          currentStatus === 'running' ? 'bg-[#58a6ff]/15' :
+          currentStatus === 'success' ? 'bg-[#3fb950]/15' :
+          'bg-[#21262d]'
+        }`}>
+          {label.toLowerCase().includes('manager') || label.toLowerCase().includes('agent') ? (
+            <Cpu className="w-3 h-3" />
+          ) : label.toLowerCase().includes('coder') ? (
+            <FileCode2 className="w-3 h-3" />
+          ) : (
+            <Zap className="w-3 h-3" />
+          )}
+        </div>
+        <span className="text-[10px] font-semibold uppercase tracking-wider truncate flex-1" title={data.label || label}>
+          {data.label || label}
+          {data.model && <span className="ml-1 text-[#6e7681] normal-case font-mono">· {data.model.split(':')[0]}</span>}
+        </span>
 
-      {/* INDEPENDENT NODE PROMPTER (Hidden on Input/Manager) */}
-      {!isInputNode && !isManager && (
-        <div className="mt-3 relative opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-          <input
-             name={`node-prompt-${id}`}
-             id={`node-prompt-${id}`}
-             type="text"
-             value={nodePrompt}
-             onChange={(e) => setNodePrompt(e.target.value)}
-             onKeyDown={handlePrompt}
-             disabled={isPrompting}
-             placeholder={`Prompt ${label}...`}
-             className="w-full bg-[#111] border border-white/10 rounded-md py-1.5 pl-2 pr-6 text-[9px] text-gray-300 placeholder-gray-600 focus:outline-none focus:border-cyan-500/50"
-          />
-          <button onClick={handlePrompt} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-cyan-400">
-             <Send className="w-3 h-3" />
+        {/* Action buttons — visible on hover */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setShowConfig(!showConfig); setIsMinimized(false); }}
+            className={`p-0.5 rounded transition-colors ${showConfig ? 'text-[#58a6ff]' : 'text-[#6e7681] hover:text-[#c9d1d9]'}`}
+            title="Configure Node"
+          >
+            <Settings2 className="w-3 h-3" />
+          </button>
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setIsMinimized(!isMinimized); setShowConfig(false); }}
+            className="p-0.5 rounded text-[#6e7681] hover:text-[#c9d1d9] transition-colors"
+            title={isMinimized ? "Expand" : "Minimize"}
+          >
+            {isMinimized ? <Maximize2 className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
+          </button>
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); deleteElements({ nodes: [{ id }] }); }}
+            className="p-0.5 rounded text-[#6e7681] hover:text-[#f85149] transition-colors"
+            title="Delete Node"
+          >
+            <Trash2 className="w-3 h-3" />
           </button>
         </div>
+
+        {/* Status badge */}
+        <div className={`ml-1 px-1.5 py-0.5 rounded text-[8px] font-semibold tracking-wider uppercase shrink-0 ${
+          currentStatus === 'running' ? 'bg-[#58a6ff]/10 text-[#58a6ff]' :
+          currentStatus === 'success' ? 'bg-[#3fb950]/10 text-[#3fb950]' :
+          currentStatus === 'error' ? 'bg-[#f85149]/10 text-[#f85149]' :
+          'bg-[#21262d] text-[#6e7681]'
+        }`}>
+          {currentStatus === 'running' ? <Activity className="w-2 h-2 animate-spin" /> : currentStatus}
+        </div>
+      </div>
+
+      {/* Config Panel */}
+      {showConfig && !isMinimized && (
+        <div className="px-3 py-2.5 border-b border-[#21262d] space-y-2.5 text-[11px]">
+          <div>
+            <label className="block text-[#6e7681] mb-1 text-[10px] uppercase tracking-wider font-medium">Node Label</label>
+            <input
+              className="w-full bg-[#161b22] border border-[#30363d] rounded px-2 py-1 text-[#c9d1d9] text-xs focus:outline-none focus:border-[#58a6ff]"
+              value={configLabel}
+              onChange={e => setConfigLabel(e.target.value)}
+              placeholder="Node name..."
+            />
+          </div>
+
+          <div>
+            <label className="block text-[#6e7681] mb-1 text-[10px] uppercase tracking-wider font-medium">Model</label>
+            <div className="relative">
+              <select
+                className="w-full bg-[#161b22] border border-[#30363d] rounded px-2 py-1 text-[#c9d1d9] text-xs focus:outline-none focus:border-[#58a6ff] appearance-none cursor-pointer pr-6"
+                value={configModel}
+                onChange={e => setConfigModel(e.target.value)}
+              >
+                <option value="">Auto / Default</option>
+                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#6e7681] pointer-events-none" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[#6e7681] mb-1 text-[10px] uppercase tracking-wider font-medium">System Prompt</label>
+            <textarea
+              className="w-full bg-[#161b22] border border-[#30363d] rounded px-2 py-1 text-[#c9d1d9] text-[10px] font-mono focus:outline-none focus:border-[#58a6ff] resize-none"
+              rows={3}
+              value={configSystemPrompt}
+              onChange={e => setConfigSystemPrompt(e.target.value)}
+              placeholder="Override system prompt for this node..."
+            />
+          </div>
+
+          <div className="flex gap-1.5 pt-0.5">
+            <button
+              onClick={saveConfig}
+              className="flex-1 flex items-center justify-center gap-1 py-1 rounded bg-[#238636]/20 border border-[#238636]/40 text-[#3fb950] hover:bg-[#238636]/30 transition-colors text-[10px] font-medium"
+            >
+              <Check className="w-3 h-3" /> Apply
+            </button>
+            <button
+              onClick={() => setShowConfig(false)}
+              className="px-2 py-1 rounded bg-[#161b22] border border-[#30363d] text-[#6e7681] hover:text-[#c9d1d9] transition-colors text-[10px]"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
       )}
 
-      {/* Output Handle */}
-      {label !== 'User Request' && <Handle type="source" position={Position.Right} className="w-2.5 h-6 rounded-sm bg-gray-500 border-none -mr-1 transition-all group-hover:bg-cyan-400 opacity-60 hover:opacity-100" />}
-      {label === 'User Request' && <Handle type="source" position={Position.Right} className="w-2 h-2 rounded-full bg-cyan-400 border-none animate-pulse" />}
+      {/* Node Body */}
+      {!isMinimized && !showConfig && (
+        <div className="px-3 py-2 space-y-2">
+          {/* Output / Status area */}
+          {stateData && stateData.status !== 'idle' && (
+            <div className="bg-[#0d1117] p-2 rounded border border-[#21262d] text-[10px] font-mono text-[#c9d1d9] h-20 overflow-y-auto">
+              {stateData.error ? (
+                <div className="text-[#f85149] flex items-start gap-1.5">
+                  <FileWarning className="w-3 h-3 mt-0.5 shrink-0" />
+                  <span className="break-all">{stateData.error}</span>
+                </div>
+              ) : stateData.output ? (
+                <span className="whitespace-pre-wrap break-words">{String(stateData.output).slice(0, 300)}</span>
+              ) : (
+                <div className="text-[#6e7681] flex items-center justify-center h-full">
+                  <Activity className="w-3 h-3 animate-spin mr-1" /> Processing...
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Latency bar */}
+          {stateData?.metadata?.latency_ms && (
+            <div className="flex justify-between items-center text-[9px] text-[#6e7681] font-mono">
+              <span className="flex items-center gap-1">
+                <Clock className="w-2.5 h-2.5" />{stateData.metadata.latency_ms}ms
+              </span>
+              <span>{stateData.metadata.tokens ? `${stateData.metadata.tokens} tok` : ''}</span>
+            </div>
+          )}
+
+          {/* Quick prompt input */}
+          {!isInputNode && (
+            <div className="relative">
+              <input
+                name={`node-prompt-${id}`}
+                id={`node-prompt-${id}`}
+                type="text"
+                value={nodePrompt}
+                onChange={(e) => setNodePrompt(e.target.value)}
+                onKeyDown={handlePrompt}
+                disabled={isPrompting}
+                placeholder={`Prompt this node...`}
+                className="w-full bg-[#0d1117] border border-[#21262d] rounded py-1 pl-2 pr-6 text-[10px] text-[#c9d1d9] placeholder-[#484f58] focus:outline-none focus:border-[#58a6ff]/60 disabled:opacity-40 transition-colors"
+              />
+              <button
+                onClick={handlePrompt}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[#484f58] hover:text-[#58a6ff] transition-colors"
+              >
+                <Send className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

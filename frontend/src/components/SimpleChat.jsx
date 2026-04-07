@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Copy, Check, Loader2, RefreshCw, AlertTriangle, ChevronDown, MessageCircle, Heart, Flame, BookOpen, Brain, Skull, Sparkles, Cpu, BarChart3, X, Edit3 } from 'lucide-react';
+import { Send, Copy, Check, Loader2, RefreshCw, AlertTriangle, ChevronDown, MessageCircle, Heart, Flame, BookOpen, Brain, Skull, Cpu, BarChart3, X, Edit3, Sparkles, Settings2 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { getAgents, getAgentById, loadAgentPrompts, getAgentPrompt, API, CHAT_API } from '../config/agents';
+import { useSimpleChatHistoryStore } from '../store/useSimpleChatHistoryStore';
+import ChatHistoryPanel from './ChatHistoryPanel';
 
 const PERSONA_ICONS = {
   unhinged_gf: Heart,
@@ -19,6 +23,65 @@ const PERSONAS = [
   { key: 'roaster', label: 'Roaster', icon: Skull, color: '#ef4444', desc: 'Merciless Burns' },
 ];
 
+const markdownComponents = {
+  code({ inline, className, children, ...props }) {
+    const match = /language-(\w+)/.exec(className || '');
+    const lang = match ? match[1] : '';
+    const codeStr = String(children).replace(/\n$/, '');
+
+    if (!inline && lang) {
+      return (
+        <div className="relative my-3 rounded-lg overflow-hidden border border-borderDefault/50 group">
+          <div className="flex items-center justify-between px-3 py-1.5 bg-[#1e1e1e]/80 border-b border-borderDefault/30">
+            <span className="text-[10px] text-fgSubtle font-medium uppercase tracking-wider">{lang}</span>
+          </div>
+          <SyntaxHighlighter
+            style={vscDarkPlus}
+            language={lang}
+            PreTag="div"
+            customStyle={{ margin: 0, borderRadius: 0, padding: '12px', fontSize: '12px', lineHeight: '1.5', background: '#0d1117' }}
+            {...props}
+          >
+            {codeStr}
+          </SyntaxHighlighter>
+        </div>
+      );
+    }
+
+    return (
+      <code className="bg-canvasSubtle/50 border border-borderDefault/30 rounded px-1.5 py-0.5 text-[11px] font-mono text-accent" {...props}>
+        {children}
+      </code>
+    );
+  },
+  p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+  li: ({ children }) => <li className="text-sm">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-fgDefault">{children}</strong>,
+  em: ({ children }) => <em className="italic text-fgMuted">{children}</em>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-accent/30 pl-3 py-1 my-2 text-fgMuted italic">{children}</blockquote>
+  ),
+  h1: ({ children }) => <h1 className="text-lg font-bold text-fgDefault mb-2 mt-3">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-base font-bold text-fgDefault mb-2 mt-3">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-sm font-bold text-fgDefault mb-1 mt-2">{children}</h3>,
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-3">
+      <table className="w-full text-xs border-collapse">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border border-borderDefault/50 px-2 py-1 bg-canvasSubtle/50 text-left font-semibold">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-borderDefault/30 px-2 py-1">{children}</td>
+  ),
+  a: ({ href, children }) => (
+    <a href={href} className="text-accent hover:text-accent/80 underline underline-offset-2 transition-colors" target="_blank" rel="noopener noreferrer">{children}</a>
+  ),
+};
+
 export default function SimpleChat() {
   const AGENTS = getAgents();
   const [availableModels, setAvailableModels] = useState([]);
@@ -27,13 +90,12 @@ export default function SimpleChat() {
   const [chatMode, setChatMode] = useState('persona');
   const [selectedModel, setSelectedModel] = useState('');
   const [directModel, setDirectModel] = useState('');
-  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [retryPayload, setRetryPayload] = useState(null);
-  const [sessionId] = useState(() => `chat_${Date.now()}`);
+  const [sessionId, setSessionId] = useState(null);
   const [personaDefaultPrompts, setPersonaDefaultPrompts] = useState({});
   const [personaCustomPrompts, setPersonaCustomPrompts] = useState({});
   const [agentDefaultPrompts, setAgentDefaultPrompts] = useState({});
@@ -44,6 +106,16 @@ export default function SimpleChat() {
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
   const pickerRef = useRef(null);
+
+  const {
+    sessions, activeSessionId,
+    createSession, setActiveSession,
+    addMessage, updateLastMessage,
+    deleteSession, setSessionMessages, updateSessionMeta,
+  } = useSimpleChatHistoryStore();
+
+  const activeSession = sessions.find(s => s.id === activeSessionId);
+  const messages = activeSession ? activeSession.messages : [];
 
   useEffect(() => {
     Promise.all([
@@ -80,11 +152,30 @@ export default function SimpleChat() {
       setAgentDefaultPrompts(agentDefaults);
       setAgentCustomPrompts({ ...agentDefaults });
     }).catch(console.error);
+
+    fetch(`${API}/chat/sessions?limit=1`).then(r => r.json()).then(data => {
+      if (data.sessions?.length > 0) {
+        const lastSession = data.sessions[0];
+        setSessionId(lastSession.session_id);
+      } else {
+        createNewSession();
+      }
+    }).catch(() => {
+      createNewSession();
+    });
   }, []);
 
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
+    if (sessions.length === 0) {
+      createSession('persona', PERSONAS[0], null, '', '');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSessionId && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, activeSessionId]);
 
   useEffect(() => {
     const handleClick = (e) => {
@@ -98,7 +189,53 @@ export default function SimpleChat() {
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, []);
+  }, [activeSessionId]);
+
+  const createNewSession = async () => {
+    try {
+      const res = await fetch(`${API}/chat/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: chatMode,
+          selected_agent: selectedAgent?.id || '',
+          selected_model: selectedModel,
+          persona_key: selectedPersona?.key || '',
+          direct_model: directModel,
+        }),
+      });
+      const data = await res.json();
+      setSessionId(data.session_id);
+    } catch (e) {
+      setSessionId(`chat_${Date.now()}`);
+    }
+  };
+
+  const handleSelectSession = (id) => {
+    setActiveSession(id);
+    const session = sessions.find(s => s.id === id);
+    if (session) {
+      if (session.mode) setChatMode(session.mode);
+      if (session.persona) {
+        const p = PERSONAS.find(pp => pp.key === session.persona.key);
+        if (p) setSelectedPersona(p);
+      }
+      if (session.agent) {
+        const a = getAgentById(session.agent.id);
+        if (a) setSelectedAgent(a);
+      }
+      if (session.model && availableModels.includes(session.model)) setSelectedModel(session.model);
+      if (session.directModel && availableModels.includes(session.directModel)) setDirectModel(session.directModel);
+    }
+  };
+
+  const handleCreateNew = () => {
+    createSession(chatMode, selectedPersona, selectedAgent, selectedModel, directModel);
+  };
+
+  const handleDeleteSession = (id) => {
+    deleteSession(id);
+  };
 
   const copyText = (text, id) => {
     navigator.clipboard.writeText(text);
@@ -143,9 +280,83 @@ export default function SimpleChat() {
     }
   };
 
+  const handlePersonaChange = (persona) => {
+    const prev = selectedPersona.label;
+    setSelectedPersona(persona);
+    if (messages.length > 0) {
+      addMessage({
+        role: 'system',
+        content: `Persona changed: ${prev} \u2192 ${persona.label}`,
+        id: Date.now(),
+        systemType: 'persona_change',
+      });
+    }
+    updateSessionMeta({ persona: { key: persona.key, label: persona.label, color: persona.color } });
+  };
+
+  const handleAgentChange = (agent) => {
+    const prev = selectedAgent.label;
+    setSelectedAgent(agent);
+    if (messages.length > 0) {
+      addMessage({
+        role: 'system',
+        content: `Agent changed: ${prev} \u2192 ${agent.label}`,
+        id: Date.now(),
+        systemType: 'agent_change',
+      });
+    }
+    updateSessionMeta({ agent: { id: agent.id, label: agent.label, color: agent.color } });
+  };
+
+  const handleModelChange = (model) => {
+    const prev = selectedModel;
+    setSelectedModel(model);
+    if (messages.length > 0) {
+      addMessage({
+        role: 'system',
+        content: `Model changed: ${prev} \u2192 ${model}`,
+        id: Date.now(),
+        systemType: 'model_change',
+      });
+    }
+    updateSessionMeta({ model });
+  };
+
+  const handleDirectModelChange = (model) => {
+    const prev = directModel;
+    setDirectModel(model);
+    if (messages.length > 0) {
+      addMessage({
+        role: 'system',
+        content: `Model changed: ${prev} \u2192 ${model}`,
+        id: Date.now(),
+        systemType: 'model_change',
+      });
+    }
+    updateSessionMeta({ directModel: model });
+  };
+
+  const handleModeChange = (mode) => {
+    const prev = chatMode;
+    setChatMode(mode);
+    if (messages.length > 0) {
+      addMessage({
+        role: 'system',
+        content: `Mode changed: ${prev} \u2192 ${mode}`,
+        id: Date.now(),
+        systemType: 'mode_change',
+      });
+    }
+    updateSessionMeta({ mode });
+  };
+
   const sendMessage = async (overrideInput) => {
     const msgText = overrideInput || input;
     if (!msgText.trim() || isStreaming) return;
+
+    if (!activeSessionId) {
+      createSession(chatMode, selectedPersona, selectedAgent, selectedModel, directModel);
+    }
 
     const userMsg = { role: 'user', content: msgText, id: Date.now() };
     const aiMsg = {
@@ -160,7 +371,8 @@ export default function SimpleChat() {
     };
 
     setRetryPayload(null);
-    setMessages(prev => [...prev, userMsg, aiMsg]);
+    addMessage(userMsg);
+    addMessage(aiMsg);
     if (!overrideInput) setInput('');
     setIsStreaming(true);
 
@@ -172,8 +384,8 @@ export default function SimpleChat() {
         res = await fetch(`${API}/agent/${selectedAgent.id}/chat`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            message: msgText, 
+          body: JSON.stringify({
+            message: msgText,
             model: selectedModel,
             custom_prompt: isCustom ? customPrompt : undefined,
           }),
@@ -216,31 +428,24 @@ export default function SimpleChat() {
             const data = JSON.parse(line.slice(6));
             if (data.chunk) {
               fullText += data.chunk;
-              setMessages(prev => {
-                const msgs = [...prev];
-                const lastIdx = msgs.length - 1;
-                msgs[lastIdx] = { ...msgs[lastIdx], content: fullText };
-                return msgs;
-              });
+              updateLastMessage(msg => ({ ...msg, content: fullText }));
             }
           } catch (e) { }
         }
       }
 
-      setMessages(prev => {
-        const msgs = [...prev];
-        const lastIdx = msgs.length - 1;
-        msgs[lastIdx] = { ...msgs[lastIdx], streaming: false };
-        return msgs;
-      });
+      updateLastMessage(msg => ({ ...msg, streaming: false }));
+
+      if (sessionId) {
+        fetch(`${API}/chat/sessions/${sessionId}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msgText, model: chatMode === 'direct' ? directModel : selectedModel }),
+        }).catch(() => {});
+      }
     } catch (err) {
       setRetryPayload(msgText);
-      setMessages(prev => {
-        const msgs = [...prev];
-        const lastIdx = msgs.length - 1;
-        msgs[lastIdx] = { ...msgs[lastIdx], content: '', streaming: false, error: err.message };
-        return msgs;
-      });
+      updateLastMessage(msg => ({ ...msg, content: '', streaming: false, error: err.message }));
     } finally {
       setIsStreaming(false);
     }
@@ -248,241 +453,217 @@ export default function SimpleChat() {
 
   const handleRetry = () => {
     if (retryPayload) {
-      setMessages(prev => prev.slice(0, -2));
+      const msgs = [...messages];
+      setSessionMessages(msgs.slice(0, -2));
       sendMessage(retryPayload);
     }
   };
 
-  const renderCodeBlocks = (text) => {
-    const parts = text.split(/(```[\s\S]*?```)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('```')) {
-        const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
-        const lang = match?.[1] || '';
-        const code = match?.[2] || part.slice(3, -3);
-        const blockId = `code-${i}`;
-        return (
-          <div key={i} className="relative my-3">
-            <div className="flex items-center justify-between bg-[#1a1a2e] px-3 py-1.5 rounded-t-lg border border-white/5 border-b-0">
-              <span className="text-[9px] text-gray-500 uppercase tracking-widest font-bold">{lang || 'code'}</span>
-              <button onClick={() => copyText(code, blockId)} className="text-gray-500 hover:text-cyan-400 transition-colors">
-                {copiedId === blockId ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-              </button>
-            </div>
-            <pre className="bg-[#0d0d1a] p-4 rounded-b-lg border border-white/5 border-t-0 text-[12px] text-cyan-100/80 overflow-x-auto custom-scrollbar font-mono leading-relaxed">
-              {code}
-            </pre>
-          </div>
-        );
-      }
-      return <span key={i} className="whitespace-pre-wrap">{part}</span>;
-    });
+  const renderMessageContent = (content) => {
+    return (
+      <ReactMarkdown components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
+    );
   };
 
   const currentColor = chatMode === 'agent' ? selectedAgent.color : chatMode === 'direct' ? '#6366f1' : selectedPersona.color;
   const currentLabel = chatMode === 'agent' ? selectedAgent.label : chatMode === 'direct' ? directModel : selectedPersona.label;
 
   return (
-    <div className="flex-1 h-full flex flex-col bg-[#070709]">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto custom-scrollbar">
-        {messages.length === 0 && (
-          <div className="flex items-center justify-center h-full">
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-              className="text-center px-6"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-cyan-500/10 to-purple-500/10 border border-white/[0.06] flex items-center justify-center mx-auto mb-5">
-                {chatMode === 'direct' ? (
-                  <BarChart3 className="w-6 h-6 text-indigo-400/60" />
-                ) : chatMode === 'agent' ? (
-                  React.createElement(selectedAgent.icon, { className: 'w-6 h-6', style: { color: selectedAgent.color } })
-                ) : (
-                  React.createElement(selectedPersona.icon || Sparkles, { className: 'w-6 h-6', style: { color: selectedPersona.color } })
-                )}
+    <div className="flex-1 h-full flex bg-gradient-bg-mesh">
+      <div className="flex-1 h-full flex flex-col min-w-0">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          {messages.length === 0 && (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center px-6">
+                <div className="w-14 h-14 rounded-xl bg-canvasSubtle/50 border border-borderDefault/50 flex items-center justify-center mx-auto mb-4 animate-float backdrop-blur-sm">
+                  {chatMode === 'direct' ? (
+                    <BarChart3 className="w-7 h-7 text-fgSubtle" />
+                  ) : chatMode === 'agent' ? (
+                    React.createElement(selectedAgent.icon, { className: 'w-7 h-7', style: { color: selectedAgent.color } })
+                  ) : (
+                    React.createElement(selectedPersona.icon || Sparkles, { className: 'w-7 h-7', style: { color: selectedPersona.color } })
+                  )}
+                </div>
+                <h2 className="text-lg font-semibold text-gradient-accent mb-1">What can I help with?</h2>
+                <p className="text-sm text-fgMuted max-w-md">
+                  {chatMode === 'direct'
+                    ? `Chat directly with ${directModel || 'a model'}.`
+                    : chatMode === 'agent'
+                    ? `Chat with ${currentLabel}. Click the edit icon to customize the system prompt.`
+                    : `Ask ${currentLabel}. Switch personas or models below.`}
+                </p>
               </div>
-              <h2 className="text-xl font-semibold text-gray-200 mb-2">What can I help with?</h2>
-              <p className="text-[13px] text-gray-600 max-w-md">
-                {chatMode === 'direct'
-                  ? `Chat directly with ${directModel || 'a model'}.`
-                  : chatMode === 'agent'
-                  ? `Chat with ${currentLabel}. Click the edit icon to customize the system prompt.`
-                  : `Ask ${currentLabel}. Switch personas or models below.`}
-              </p>
-            </motion.div>
-          </div>
-        )}
+            </div>
+          )}
 
-        {messages.length > 0 && (
-          <div className="max-w-3xl mx-auto px-5 py-6 space-y-1">
-            {messages.map((msg) => (
-              <motion.div
-                key={msg.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                {msg.role === 'user' ? (
-                  <div className="flex justify-end mb-4">
-                    <div className="bg-white/[0.06] border border-white/[0.06] rounded-2xl rounded-br-md px-4 py-3 max-w-[85%] text-[14px] text-gray-200 leading-relaxed">
-                      {msg.content}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mb-6">
-                    {(msg.persona || msg.agent || msg.directModel) && (
-                      <div className="flex items-center gap-2 mb-2 ml-1">
-                        {msg.agent ? (
-                          <>
-                            <div className="w-5 h-5 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${msg.agent.color}15`, border: `1px solid ${msg.agent.color}25` }}>
-                              {React.createElement(msg.agent.icon, { className: "w-3 h-3", style: { color: msg.agent.color } })}
-                            </div>
-                            <span className="text-[12px] font-semibold text-gray-400">{msg.agent.label}</span>
-                          </>
-                        ) : msg.persona ? (
-                          <>
-                            <div className="w-5 h-5 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${PERSONAS.find(p => p.key === msg.persona)?.color || '#06b6d4'}15`, border: `1px solid ${PERSONAS.find(p => p.key === msg.persona)?.color || '#06b6d4'}25` }}>
-                              {React.createElement(PERSONA_ICONS[msg.persona] || Sparkles, { className: "w-3 h-3", style: { color: PERSONAS.find(p => p.key === msg.persona)?.color } })}
-                            </div>
-                            <span className="text-[12px] font-semibold text-gray-400">{PERSONAS.find(p => p.key === msg.persona)?.label || 'AI'}</span>
-                          </>
-                        ) : msg.directModel ? (
-                          <>
-                            <div className="w-5 h-5 rounded-lg flex items-center justify-center bg-indigo-500/15 border border-indigo-500/25">
-                              <BarChart3 className="w-3 h-3 text-indigo-400" />
-                            </div>
-                            <span className="text-[12px] font-semibold text-gray-400">Direct</span>
-                          </>
-                        ) : null}
-                        <span className="text-[10px] text-gray-600 font-mono">{msg.model}</span>
+          {messages.length > 0 && (
+            <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+              {messages.map((msg) => (
+                <div key={msg.id}>
+                  {msg.role === 'system' ? (
+                    <div className="flex items-center justify-center my-3">
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-canvasSubtle/50 border border-borderDefault/30 rounded-full">
+                        <Settings2 className="w-3 h-3 text-fgSubtle" />
+                        <span className="text-[11px] text-fgSubtle font-medium">{msg.content}</span>
                       </div>
-                    )}
+                    </div>
+                  ) : msg.role === 'user' ? (
+                    <div className="flex justify-end mb-4">
+                      <div className="bg-gradient-to-br from-accent/15 to-accent/5 border border-accent/20 rounded-lg rounded-br-sm px-4 py-2.5 max-w-[85%] text-sm text-fgDefault leading-relaxed shadow-[0_2px_8px_rgba(88,166,255,0.1)]">
+                        {msg.content}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mb-4">
+                      {(msg.persona || msg.agent || msg.directModel) && (
+                        <div className="flex items-center gap-2 mb-1.5 ml-1">
+                          {msg.agent ? (
+                            <>
+                              <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: `${msg.agent.color}15`, border: `1px solid ${msg.agent.color}25` }}>
+                                {React.createElement(msg.agent.icon, { className: "w-3 h-3", style: { color: msg.agent.color } })}
+                              </div>
+                              <span className="text-xs font-medium text-fgMuted">{msg.agent.label}</span>
+                            </>
+                          ) : msg.persona ? (
+                            <>
+                              <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: `${PERSONAS.find(p => p.key === msg.persona)?.color || '#58a6ff'}15`, border: `1px solid ${PERSONAS.find(p => p.key === msg.persona)?.color || '#58a6ff'}25` }}>
+                                {React.createElement(PERSONA_ICONS[msg.persona] || MessageCircle, { className: "w-3 h-3", style: { color: PERSONAS.find(p => p.key === msg.persona)?.color } })}
+                              </div>
+                              <span className="text-xs font-medium text-fgMuted">{PERSONAS.find(p => p.key === msg.persona)?.label || 'AI'}</span>
+                            </>
+                          ) : msg.directModel ? (
+                            <>
+                              <div className="w-5 h-5 rounded flex items-center justify-center bg-canvasSubtle/50 border border-borderDefault/50">
+                                <BarChart3 className="w-3 h-3 text-fgSubtle" />
+                              </div>
+                              <span className="text-xs font-medium text-fgMuted">Direct</span>
+                            </>
+                          ) : null}
+                          <span className="text-[10px] text-fgSubtle font-mono">{msg.model}</span>
+                        </div>
+                      )}
 
-                    <div className="text-[14px] text-gray-300 leading-[1.75] ml-1">
-                      {msg.error ? (
-                        <div className="flex items-start gap-3 bg-red-500/5 border border-red-500/10 rounded-xl px-4 py-3">
-                          <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="text-red-400 text-[13px]">Failed to get response</p>
-                            <p className="text-red-400/50 text-[11px] mt-1 font-mono">{msg.error}</p>
-                            <button onClick={handleRetry} className="mt-2 text-[11px] text-red-300 hover:text-white flex items-center gap-1 transition-colors">
-                              <RefreshCw className="w-3 h-3" /> Retry
-                            </button>
+                      <div className="text-sm text-fgDefault leading-relaxed ml-1">
+                        {msg.error ? (
+                          <div className="flex items-start gap-2.5 bg-danger/5 border border-danger/20 rounded-md px-3 py-2.5">
+                            <AlertTriangle className="w-4 h-4 text-danger shrink-0 mt-0.5" />
+                            <div>
+                              <p className="text-danger text-sm">Failed to get response</p>
+                              <p className="text-danger/60 text-xs mt-0.5 font-mono">{msg.error}</p>
+                              <button onClick={handleRetry} className="mt-1.5 text-xs text-danger hover:text-danger/80 flex items-center gap-1 transition-colors">
+                                <RefreshCw className="w-3 h-3" /> Retry
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ) : !msg.content && msg.streaming ? (
-                        <div className="flex items-center gap-2.5 py-1 text-gray-500">
-                          <div className="flex gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                            <span className="w-1.5 h-1.5 rounded-full bg-gray-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        ) : !msg.content && msg.streaming ? (
+                          <div className="flex items-center gap-2 py-1 text-fgSubtle">
+                            <div className="flex gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
+                              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
+                              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+                            </div>
+                            <span className="text-xs">Thinking...</span>
                           </div>
-                          <span className="text-[12px] text-gray-600">Thinking...</span>
+                        ) : (
+                          <>
+                            <div className="prose prose-invert max-w-none prose-p:mb-2 prose-p:last:mb-0 prose-sm">
+                              {renderMessageContent(msg.content)}
+                            </div>
+                            {msg.streaming && msg.content && (
+                              <span className="inline-block w-[2px] h-[16px] bg-accent animate-pulse ml-0.5 rounded-sm align-text-bottom" />
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {!msg.streaming && msg.content && !msg.error && (
+                        <div className="flex items-center gap-2 mt-2 ml-1">
+                          <button onClick={() => copyText(msg.content, msg.id)} className="text-fgSubtle hover:text-accent transition-colors p-1 rounded hover:bg-canvasSubtle/50" title="Copy">
+                            {copiedId === msg.id ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
                         </div>
-                      ) : (
-                        <>
-                          {renderCodeBlocks(msg.content)}
-                          {msg.streaming && msg.content && (
-                            <span className="inline-block w-[3px] h-[18px] bg-gray-400 animate-pulse ml-0.5 rounded-sm align-text-bottom" />
-                          )}
-                        </>
                       )}
                     </div>
-
-                    {!msg.streaming && msg.content && !msg.error && (
-                      <div className="flex items-center gap-3 mt-2.5 ml-1">
-                        <button onClick={() => copyText(msg.content, msg.id)} className="text-gray-600 hover:text-gray-300 transition-colors p-1 rounded-md hover:bg-white/[0.04]" title="Copy">
-                          {copiedId === msg.id ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </motion.div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="border-t border-white/[0.04] bg-[#070709]">
-        <div className="max-w-3xl mx-auto px-5 py-4">
-          <div className="relative bg-[#0e0e14] border border-white/[0.08] rounded-2xl focus-within:border-white/[0.15] transition-colors shadow-[0_-4px_20px_rgba(0,0,0,0.3)]">
-            <div className="flex items-end gap-2 p-2">
-              <textarea
-                ref={inputRef}
-                name="chat-input"
-                id="chat-input"
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  e.target.style.height = 'auto';
-                  e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                  }
-                }}
-                disabled={isStreaming}
-                placeholder={`Ask ${currentLabel}...`}
-                rows={1}
-                className="flex-1 bg-transparent text-[14px] text-gray-200 placeholder-gray-600 resize-none outline-none px-2 py-2 min-h-[40px] max-h-[160px] disabled:opacity-40"
-              />
-              <button
-                onClick={() => sendMessage()}
-                disabled={isStreaming || !input.trim()}
-                className="p-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-gray-400 hover:text-white transition-all disabled:opacity-20 disabled:cursor-not-allowed shrink-0 mb-0.5"
-              >
-                {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              </button>
+                  )}
+                </div>
+              ))}
             </div>
+          )}
+        </div>
 
-            <div className="flex items-center justify-between px-3 pb-2.5 pt-0.5">
-              <div className="relative" ref={pickerRef}>
+        <div className="border-t border-borderDefault/50 bg-canvasSubtle/80 backdrop-blur-sm">
+          <div className="max-w-3xl mx-auto px-4 py-3">
+            <div className="relative bg-canvas/50 border border-borderDefault/50 rounded-lg focus-within:border-accent focus-within:ring-1 focus-within:ring-accent/20 transition-all focus-within:shadow-[0_0_10px_rgba(88,166,255,0.1)]">
+              <div className="flex items-end gap-2 p-2">
+                <textarea
+                  ref={inputRef}
+                  name="chat-input"
+                  id="chat-input"
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  disabled={isStreaming}
+                  placeholder={`Ask ${currentLabel}...`}
+                  rows={1}
+                  className="flex-1 bg-transparent text-sm text-fgDefault placeholder-fgSubtle resize-none outline-none px-2 py-1.5 min-h-[36px] max-h-[160px] disabled:opacity-40"
+                />
                 <button
-                  onClick={() => setShowModelPicker(!showModelPicker)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-white/[0.05] transition-colors text-[12px] group"
+                  onClick={() => sendMessage()}
+                  disabled={isStreaming || !input.trim()}
+                  className="p-2 rounded-md bg-gradient-to-r from-accent to-accent/80 hover:from-accent/90 hover:to-accent/70 text-white transition-all disabled:opacity-30 disabled:cursor-not-allowed shrink-0 cursor-pointer shadow-[0_0_8px_rgba(88,166,255,0.2)]"
                 >
-                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: currentColor, boxShadow: `0 0 6px ${currentColor}40` }} />
-                  <span className="text-gray-400 group-hover:text-gray-200 font-medium transition-colors">{currentLabel}</span>
-                  <ChevronDown className={`w-3 h-3 text-gray-600 transition-transform ${showModelPicker ? 'rotate-180' : ''}`} />
+                  {isStreaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
+              </div>
 
-                <AnimatePresence>
+              <div className="flex items-center justify-between px-3 pb-2 pt-0">
+                <div className="relative" ref={pickerRef}>
+                  <button
+                    onClick={() => setShowModelPicker(!showModelPicker)}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-canvasSubtle/50 transition-colors text-xs group"
+                  >
+                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: currentColor }} />
+                    <span className="text-fgMuted group-hover:text-fgDefault font-medium transition-colors">{currentLabel}</span>
+                    <ChevronDown className={`w-3 h-3 text-fgSubtle transition-transform ${showModelPicker ? 'rotate-180' : ''}`} />
+                  </button>
+
                   {showModelPicker && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                      transition={{ duration: 0.15, ease: [0.4, 0, 0.2, 1] }}
-                      className="absolute bottom-full left-0 mb-2 w-72 bg-[#12121a] border border-white/[0.1] rounded-xl shadow-[0_8px_40px_rgba(0,0,0,0.6)] overflow-hidden z-50 flex flex-col"
-                    >
-                      <div className="p-3 border-b border-white/[0.05] bg-white/[0.02]">
-                        <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                    <div className="absolute bottom-full left-0 mb-1 w-64 glass-strong rounded-md shadow-dropdown overflow-hidden z-50 flex flex-col">
+                      <div className="p-2 border-b border-borderDefault/50">
+                        <span className="text-[10px] font-semibold text-fgSubtle uppercase tracking-wider">
                           {chatMode === 'persona' ? 'Select Persona' : chatMode === 'agent' ? 'Select Agent' : 'Select LLM'}
                         </span>
                       </div>
 
-                      <div className="p-1.5 max-h-[420px] overflow-y-auto custom-scrollbar">
+                      <div className="p-1 max-h-[350px] overflow-y-auto">
                         {chatMode === 'persona' && (
-                          <div className="mb-2 pb-2 border-b border-white/[0.05]">
+                          <div className="mb-1 pb-1 border-b border-borderDefault/50">
                             {PERSONAS.map(persona => (
                               <div key={persona.key} className="flex items-center gap-1">
                                 <button
-                                  onClick={() => { setSelectedPersona(persona); inputRef.current?.focus(); }}
-                                  className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left group ${selectedPersona.key === persona.key ? 'bg-white/[0.06] text-white' : 'text-gray-500 hover:bg-white/[0.03]'}`}
+                                  onClick={() => { handlePersonaChange(persona); inputRef.current?.focus(); }}
+                                  className={`flex-1 flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors text-left text-sm ${selectedPersona.key === persona.key ? 'bg-accent/10 text-accent' : 'text-fgMuted hover:bg-canvas hover:text-fgDefault'}`}
                                 >
-                                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `${persona.color}15`, border: `1px solid ${persona.color}25` }}>
+                                  <div className="w-5 h-5 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `${persona.color}15`, border: `1px solid ${persona.color}25` }}>
                                     {React.createElement(persona.icon, { className: "w-3 h-3", style: { color: persona.color } })}
                                   </div>
-                                  <span className="text-[12px] font-medium">{persona.label}</span>
-                                  {selectedPersona.key === persona.key && <div className="ml-auto w-1 h-1 rounded-full bg-cyan-400" />}
+                                  <span className="text-xs font-medium">{persona.label}</span>
+                                  {selectedPersona.key === persona.key && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
                                 </button>
                                 <button
                                   onClick={() => openPromptEditor(persona.key, 'persona')}
-                                  className="p-1.5 rounded-md text-gray-600 hover:text-cyan-400 hover:bg-white/[0.05] transition-all shrink-0"
+                                  className="p-1 rounded text-fgSubtle hover:text-accent hover:bg-canvas transition-colors shrink-0"
                                   title="Edit system prompt"
                                 >
                                   <Edit3 className="w-3 h-3" />
@@ -493,27 +674,27 @@ export default function SimpleChat() {
                         )}
 
                         {chatMode === 'agent' && (
-                          <div className="mb-2 pb-2 border-b border-white/[0.05]">
+                          <div className="mb-1 pb-1 border-b border-borderDefault/50">
                             {AGENTS.map(agent => (
                               <div key={agent.id} className="flex items-center gap-1">
                                 <button
-                                  onClick={() => { setSelectedAgent(agent); inputRef.current?.focus(); }}
-                                  className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left group ${selectedAgent.id === agent.id ? 'bg-white/[0.06] text-white' : 'text-gray-500 hover:bg-white/[0.03]'}`}
+                                  onClick={() => { handleAgentChange(agent); inputRef.current?.focus(); }}
+                                  className={`flex-1 flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors text-left text-sm ${selectedAgent.id === agent.id ? 'bg-accent/10 text-accent' : 'text-fgMuted hover:bg-canvas hover:text-fgDefault'}`}
                                 >
-                                  <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `${agent.color}15`, border: `1px solid ${agent.color}25` }}>
+                                  <div className="w-5 h-5 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: `${agent.color}15`, border: `1px solid ${agent.color}25` }}>
                                     {React.createElement(agent.icon, { className: "w-3 h-3", style: { color: agent.color } })}
                                   </div>
                                   <div className="flex-1 min-w-0">
-                                    <span className="text-[12px] font-medium">{agent.label}</span>
+                                    <span className="text-xs font-medium">{agent.label}</span>
                                     {agentCustomPrompts[agent.id] !== agentDefaultPrompts[agent.id] && (
-                                      <span className="text-[9px] text-cyan-400/60 block">custom prompt</span>
+                                      <span className="text-[9px] text-accent/60 block">custom prompt</span>
                                     )}
                                   </div>
-                                  {selectedAgent.id === agent.id && <div className="ml-auto w-1 h-1 rounded-full bg-cyan-400" />}
+                                  {selectedAgent.id === agent.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
                                 </button>
                                 <button
                                   onClick={() => openPromptEditor(agent.id, 'agent')}
-                                  className="p-1.5 rounded-md text-gray-600 hover:text-cyan-400 hover:bg-white/[0.05] transition-all shrink-0"
+                                  className="p-1 rounded text-fgSubtle hover:text-accent hover:bg-canvas transition-colors shrink-0"
                                   title="Edit system prompt"
                                 >
                                   <Edit3 className="w-3 h-3" />
@@ -524,27 +705,18 @@ export default function SimpleChat() {
                         )}
 
                         {chatMode === 'direct' && (
-                          <div className="mb-2 pb-2 border-b border-white/[0.05]">
+                          <div className="mb-1 pb-1 border-b border-borderDefault/50">
                             {availableModels.map((modelName) => {
                               const isSelected = directModel === modelName;
                               return (
                                 <button
                                   key={modelName}
-                                  onClick={() => { setDirectModel(modelName); inputRef.current?.focus(); }}
-                                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left group ${isSelected ? 'bg-indigo-500/10 border border-indigo-500/20' : 'hover:bg-white/[0.04] border border-transparent'}`}
+                                  onClick={() => { handleDirectModelChange(modelName); inputRef.current?.focus(); }}
+                                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors text-left text-sm ${isSelected ? 'bg-accent/10 text-accent' : 'text-fgMuted hover:bg-canvas hover:text-fgDefault'}`}
                                 >
-                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border transition-colors ${isSelected ? 'bg-indigo-500/20 border-indigo-500/30' : 'bg-white/[0.03] border-white/[0.05]'}`}>
-                                    <BarChart3 className={`w-4 h-4 ${isSelected ? 'text-indigo-400' : 'text-gray-600'}`} />
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <span className={`text-[13px] font-semibold truncate block ${isSelected ? 'text-indigo-100' : 'text-gray-300'}`}>{modelName}</span>
-                                    <span className="text-[10px] text-gray-600 font-mono">DIRECT CHAT</span>
-                                  </div>
-                                  {isSelected && (
-                                    <div className="w-4 h-4 rounded-full bg-indigo-500 flex items-center justify-center shrink-0">
-                                      <Check className="w-2.5 h-2.5 text-black" strokeWidth={4} />
-                                    </div>
-                                  )}
+                                  <BarChart3 className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-accent' : 'text-fgSubtle'}`} />
+                                  <span className="text-xs font-mono truncate">{modelName}</span>
+                                  {isSelected && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
                                 </button>
                               );
                             })}
@@ -553,105 +725,83 @@ export default function SimpleChat() {
 
                         {(chatMode === 'persona' || chatMode === 'agent') && (
                           <div>
-                            <div className="px-3 py-1.5 text-[10px] text-gray-500 uppercase tracking-wider font-bold">Model</div>
+                            <div className="px-2.5 py-1 text-[10px] text-fgSubtle uppercase tracking-wider font-semibold">Model</div>
                             {availableModels.map((modelName) => {
                               const isSelected = selectedModel === modelName;
                               return (
                                 <button
                                   key={modelName}
-                                  onClick={() => { setSelectedModel(modelName); setShowModelPicker(false); inputRef.current?.focus(); }}
-                                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left group ${isSelected ? 'bg-cyan-500/10 border border-cyan-500/20' : 'hover:bg-white/[0.04] border border-transparent'}`}
+                                  onClick={() => { handleModelChange(modelName); setShowModelPicker(false); inputRef.current?.focus(); }}
+                                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md transition-colors text-left text-sm ${isSelected ? 'bg-accent/10 text-accent' : 'text-fgMuted hover:bg-canvas hover:text-fgDefault'}`}
                                 >
-                                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border transition-colors ${isSelected ? 'bg-cyan-500/20 border-cyan-500/30' : 'bg-white/[0.03] border-white/[0.05]'}`}>
-                                    <Cpu className={`w-4 h-4 ${isSelected ? 'text-cyan-400' : 'text-gray-600'}`} />
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <span className={`text-[13px] font-semibold truncate block ${isSelected ? 'text-cyan-100' : 'text-gray-300'}`}>{modelName}</span>
-                                    <span className="text-[10px] text-gray-600 font-mono">OLLAMA ENGINE</span>
-                                  </div>
-                                  {isSelected && (
-                                    <div className="w-4 h-4 rounded-full bg-cyan-500 flex items-center justify-center shrink-0">
-                                      <Check className="w-2.5 h-2.5 text-black" strokeWidth={4} />
-                                    </div>
-                                  )}
+                                  <Cpu className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-accent' : 'text-fgSubtle'}`} />
+                                  <span className="text-xs font-mono truncate">{modelName}</span>
+                                  {isSelected && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-accent" />}
                                 </button>
                               );
                             })}
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </div>
                   )}
-                </AnimatePresence>
-              </div>
+                </div>
 
-              <span className="text-[10px] text-cyan-500/60 font-mono tracking-widest uppercase">
-                {chatMode === 'direct' ? directModel : selectedModel}
-              </span>
+                <span className="text-[10px] text-fgSubtle font-mono">
+                  {chatMode === 'direct' ? directModel : selectedModel}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="flex gap-1 mt-3 p-1 bg-white/[0.03] rounded-lg">
+          <div className="flex gap-1 mt-2 p-0.5 bg-canvas/50 border border-borderDefault/50 rounded-md">
             <button
-              onClick={() => setChatMode('persona')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-md text-[11px] transition-all ${chatMode === 'persona' ? 'bg-white/[0.08] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+              onClick={() => handleModeChange('persona')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs transition-all ${chatMode === 'persona' ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent font-medium' : 'text-fgSubtle hover:text-fgDefault hover:bg-canvasSubtle/50'}`}
             >
               <MessageCircle className="w-3 h-3" /> Persona
             </button>
             <button
-              onClick={() => setChatMode('agent')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-md text-[11px] transition-all ${chatMode === 'agent' ? 'bg-white/[0.08] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+              onClick={() => handleModeChange('agent')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs transition-all ${chatMode === 'agent' ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent font-medium' : 'text-fgSubtle hover:text-fgDefault hover:bg-canvasSubtle/50'}`}
             >
               <Cpu className="w-3 h-3" /> Agent
             </button>
             <button
-              onClick={() => setChatMode('direct')}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 rounded-md text-[11px] transition-all ${chatMode === 'direct' ? 'bg-white/[0.08] text-white' : 'text-gray-500 hover:text-gray-300'}`}
+              onClick={() => handleModeChange('direct')}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs transition-all ${chatMode === 'direct' ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent font-medium' : 'text-fgSubtle hover:text-fgDefault hover:bg-canvasSubtle/50'}`}
             >
-              <BarChart3 className="w-3 h-3" /> Direct LLM
+              <BarChart3 className="w-3 h-3" /> Direct
             </button>
           </div>
-
-          <p className="text-center text-[10px] text-gray-700 mt-3 flex items-center justify-center gap-2">
-            <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" /> Running {availableModels.length} Local Models via Ollama
-          </p>
         </div>
-      </div>
 
-      <AnimatePresence>
         {editingPrompt && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
             onClick={() => { setEditingPrompt(null); setEditingPromptType(null); }}
           >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              className="w-full max-w-lg bg-[#12121a] border border-white/[0.1] rounded-2xl shadow-2xl overflow-hidden"
+            <div
+              className="w-full max-w-lg glass-strong rounded-lg shadow-dropdown overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.05]">
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-borderDefault/50">
+                <div className="flex items-center gap-2.5">
                   {editingPromptType === 'agent' ? (
                     <>
                       {(() => {
                         const agent = getAgentById(editingPrompt);
-                        const color = agent?.color || '#06b6d4';
+                        const color = agent?.color || '#58a6ff';
                         const Icon = agent?.icon || Cpu;
                         const label = agent?.label || 'Edit Prompt';
                         return (
                           <>
-                            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${color}15`, border: `1px solid ${color}25` }}>
-                              {React.createElement(Icon, { className: "w-4 h-4", style: { color } })}
+                            <div className="w-7 h-7 rounded flex items-center justify-center" style={{ backgroundColor: `${color}15`, border: `1px solid ${color}25` }}>
+                              {React.createElement(Icon, { className: "w-3.5 h-3.5", style: { color } })}
                             </div>
                             <div>
-                              <h3 className="text-[14px] font-semibold text-gray-200">{label}</h3>
-                              <p className="text-[10px] text-gray-500">System prompt</p>
+                              <h3 className="text-sm font-medium text-fgDefault">{label}</h3>
+                              <p className="text-[10px] text-fgSubtle">System prompt</p>
                             </div>
                           </>
                         );
@@ -659,53 +809,62 @@ export default function SimpleChat() {
                     </>
                   ) : (
                     <>
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${PERSONAS.find(p => p.key === editingPrompt)?.color || '#06b6d4'}15`, border: `1px solid ${PERSONAS.find(p => p.key === editingPrompt)?.color || '#06b6d4'}25` }}>
-                        {React.createElement(PERSONA_ICONS[editingPrompt] || Sparkles, { className: "w-4 h-4", style: { color: PERSONAS.find(p => p.key === editingPrompt)?.color } })}
+                      <div className="w-7 h-7 rounded flex items-center justify-center" style={{ backgroundColor: `${PERSONAS.find(p => p.key === editingPrompt)?.color || '#58a6ff'}15`, border: `1px solid ${PERSONAS.find(p => p.key === editingPrompt)?.color || '#58a6ff'}25` }}>
+                        {React.createElement(PERSONA_ICONS[editingPrompt] || MessageCircle, { className: "w-3.5 h-3.5", style: { color: PERSONAS.find(p => p.key === editingPrompt)?.color } })}
                       </div>
                       <div>
-                        <h3 className="text-[14px] font-semibold text-gray-200">{PERSONAS.find(p => p.key === editingPrompt)?.label || 'Edit Prompt'}</h3>
-                        <p className="text-[10px] text-gray-500">System prompt</p>
+                        <h3 className="text-sm font-medium text-fgDefault">{PERSONAS.find(p => p.key === editingPrompt)?.label || 'Edit Prompt'}</h3>
+                        <p className="text-[10px] text-fgSubtle">System prompt</p>
                       </div>
                     </>
                   )}
                 </div>
-                <button onClick={() => { setEditingPrompt(null); setEditingPromptType(null); }} className="p-1.5 rounded-lg hover:bg-white/[0.05] text-gray-500 hover:text-white transition-all">
+                <button onClick={() => { setEditingPrompt(null); setEditingPromptType(null); }} className="text-fgSubtle hover:text-fgDefault transition-colors">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="p-5">
+              <div className="p-4">
                 <textarea
                   value={promptText}
                   onChange={(e) => setPromptText(e.target.value)}
                   rows={10}
                   name="prompt-editor"
                   id="prompt-editor"
-                  className="w-full bg-[#0a0a0f] border border-white/[0.08] rounded-xl px-4 py-3 text-[13px] text-gray-300 placeholder-gray-600 resize-none outline-none focus:border-white/[0.15] transition-colors font-mono leading-relaxed custom-scrollbar"
+                  className="w-full bg-canvas/50 border border-borderDefault/50 rounded-md px-3 py-2.5 text-sm text-fgDefault placeholder-fgSubtle resize-none outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 transition-colors font-mono leading-relaxed"
                   placeholder="Enter custom system prompt..."
                 />
               </div>
 
-              <div className="flex items-center justify-between px-5 py-4 border-t border-white/[0.05] bg-white/[0.02]">
+              <div className="flex items-center justify-between px-4 py-3 border-t border-borderDefault/50 bg-canvas/50">
                 <button
                   onClick={resetPrompt}
-                  className="text-[12px] text-gray-500 hover:text-white transition-colors flex items-center gap-1.5"
+                  className="text-xs text-fgMuted hover:text-fgDefault transition-colors flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Reset to default
                 </button>
                 <div className="flex gap-2">
-                  <button onClick={() => { setEditingPrompt(null); setEditingPromptType(null); }} className="px-4 py-2 rounded-lg text-[12px] text-gray-400 hover:text-white hover:bg-white/[0.05] transition-all">
+                  <button onClick={() => { setEditingPrompt(null); setEditingPromptType(null); }} className="btn-secondary">
                     Cancel
                   </button>
-                  <button onClick={savePrompt} className="px-4 py-2 rounded-lg text-[12px] bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-all font-medium">
+                  <button onClick={savePrompt} className="btn-primary">
                     Save
                   </button>
                 </div>
               </div>
-            </motion.div>
-          </motion.div>
+            </div>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
+
+      <ChatHistoryPanel
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={handleSelectSession}
+        onCreateNew={handleCreateNew}
+        onDeleteSession={handleDeleteSession}
+        emptyLabel="Start your first chat"
+      />
     </div>
   );
 }

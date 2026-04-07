@@ -255,7 +255,7 @@ async def _create_venv_safely(venv_dir: str, project_dir: str) -> str:
 
 async def execute_project_async(run_id: str, project_id: str):
     """
-    Sandboxed Execution Engine: Runs projects in isolated venvs.
+    Sandboxed Execution Engine: Routes to language-specific runner.
     """
     node_id = "executor"
     project_dir = os.path.join(WORKSPACE_DIR, project_id)
@@ -274,267 +274,56 @@ async def execute_project_async(run_id: str, project_id: str):
 
     entry = meta.get("entry_point", "main.py")
     deps = meta.get("dependencies", [])
-    venv_dir = os.path.join(project_dir, ".venv")
+    language = meta.get("language", "python")
 
-    # ── Step 1: Create isolated venv ──
-    actual_python = "python3"
-    venv_ok = False
-    try:
-        await emitter.emit(
-            run_id, node_id, "update", output_str="🔧 Creating isolated venv..."
-        )
-        actual_python = await _create_venv_safely(venv_dir, project_dir)
-        venv_ok = True
-        await emitter.emit(
-            run_id, node_id, "update", output_str=f"✅ Venv ready: {actual_python}"
-        )
-    except Exception as e:
-        await emitter.emit(
-            run_id,
-            node_id,
-            "update",
-            output_str=f"⚠️ Venv failed ({e}), using system python",
-        )
+    from services.executor import get_runner, detect_language
 
-    # ── Step 2: Install dependencies ──
-    STDLIB = {
-        "os",
-        "sys",
-        "json",
-        "re",
-        "math",
-        "time",
-        "datetime",
-        "collections",
-        "itertools",
-        "functools",
-        "pathlib",
-        "subprocess",
-        "typing",
-        "random",
-        "string",
-        "io",
-        "hashlib",
-        "copy",
-        "argparse",
-        "logging",
-        "unittest",
-        "csv",
-        "sqlite3",
-        "http",
-        "urllib",
-        "socket",
-        "threading",
-        "asyncio",
-        "abc",
-        "enum",
-        "dataclasses",
-        "textwrap",
-        "shutil",
-        "tempfile",
-        "contextlib",
-        "operator",
-        "struct",
-        "array",
-        "heapq",
-        "bisect",
-        "psutil",
-        "platform",
-        "signal",
-        "warnings",
-        "traceback",
-        "code",
-        "inspect",
-        "dis",
-        "pprint",
-        "reprlib",
-        "numbers",
-        "decimal",
-        "fractions",
-        "statistics",
-        "secrets",
-        "glob",
-        "fnmatch",
-        "stat",
-        "fileinput",
-        "filecmp",
-        "pickle",
-        "shelve",
-        "marshal",
-        "dbm",
-        "configparser",
-        "netrc",
-        "xdrlib",
-        "plistlib",
-        "email",
-        "html",
-        "xml",
-        "webbrowser",
-        "cgi",
-        "cgitb",
-        "wsgiref",
-        "xmlrpc",
-        "ipaddress",
-        "mailbox",
-        "mimetypes",
-        "base64",
-        "binascii",
-        "quopri",
-        "uu",
-        "calendar",
-        "locale",
-        "gettext",
-        "getpass",
-        "curses",
-        "ctypes",
-        "readline",
-        "rlcompleter",
-        "struct",
-        "codecs",
-        "unicodedata",
-        "stringprep",
-        "difflib",
-        "sched",
-        "queue",
-        "_thread",
-        "multiprocessing",
-        "concurrent",
-        "contextvars",
-        "gc",
-        "weakref",
-        "types",
-        "copyreg",
-        "tempfile",
-        "atexit",
-        "builtins",
-        "__future__",
-        "importlib",
-        "pkgutil",
-        "zipimport",
-        "zipfile",
-        "tarfile",
-        "gzip",
-        "bz2",
-        "lzma",
-        "zlib",
-        "hmac",
-        "secrets",
-    }
+    if not os.path.exists(os.path.join(project_dir, entry)):
+        files = meta.get("files", [])
+        detected = detect_language(project_dir, files)
+        if detected != language:
+            language = detected
+            meta["language"] = language
+            with open(meta_path, "w") as f:
+                json.dump(meta, f, indent=2)
 
-    external_deps = [
-        d for d in deps if d.lower().split(".")[0].split("[")[0] not in STDLIB
-    ]
+    runner = get_runner(language)
 
-    if external_deps:
-        pip_bin = os.path.join(venv_dir, "bin", "pip") if venv_ok else "pip3"
-        if not os.path.exists(pip_bin):
-            pip_bin = "pip3"
+    async def emit_fn(event_type, message):
+        await emitter.emit(run_id, node_id, event_type, output_str=message)
 
-        await emitter.emit(
-            run_id,
-            node_id,
-            "update",
-            output_str=f"📦 Installing: {', '.join(external_deps)}...",
-        )
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                pip_bin,
-                "install",
-                "--quiet",
-                *external_deps,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=project_dir,
-                env={**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"},
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-            if proc.returncode != 0:
-                err_text = stderr.decode().strip()[:500] if stderr else "unknown"
-                await emitter.emit(
-                    run_id, node_id, "update", output_str=f"⚠️ pip warning: {err_text}"
-                )
-        except asyncio.TimeoutError:
-            await emitter.emit(
-                run_id,
-                node_id,
-                "update",
-                output_str="⚠️ pip install timed out after 180s",
-            )
-        except Exception as e:
-            await emitter.emit(
-                run_id, node_id, "update", output_str=f"⚠️ pip error: {e}"
-            )
+    await emit_fn("update", f"Detected language: {language}")
 
-    # ── Step 3: Run entry point ──
-    entry_path = os.path.join(project_dir, entry)
-    if not os.path.exists(entry_path):
+    setup_ok, *setup_extra = await runner.setup(project_dir, emit_fn)
+    if not setup_ok and language == "python":
+        await emit_fn("update", "Venv setup failed, using system python")
+
+    await runner.install_deps(project_dir, deps, emit_fn)
+
+    if not os.path.exists(os.path.join(project_dir, entry)):
         await emitter.emit(run_id, node_id, "error", error=f"Entry '{entry}' not found")
         return {"status": "error", "output": f"Missing {entry}"}
 
-    if not venv_ok:
-        actual_python = "python3"
+    result = await runner.run(project_dir, entry, emit_fn)
 
-    await emitter.emit(
-        run_id, node_id, "update", output_str=f"▶ Running: {actual_python} {entry}"
-    )
-
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
-    if venv_ok:
-        env["VIRTUAL_ENV"] = venv_dir
-        env["PATH"] = (
-            os.path.join(venv_dir, "bin") + os.pathsep + os.environ.get("PATH", "")
+    if result["status"] == "success":
+        await emitter.emit(
+            run_id,
+            node_id,
+            "complete",
+            output_str=f"Success (exit {result['exit_code']})\n\n{result['output']}",
+            metadata={"exit_code": result["exit_code"], "project_id": project_id, "language": language},
+        )
+    else:
+        error_text = result.get("errors", result.get("output", "Unknown error"))
+        await emitter.emit(
+            run_id,
+            node_id,
+            "error",
+            error=f"Failed (exit {result.get('exit_code', -1)})\n\n{error_text}",
         )
 
-    try:
-        process = await asyncio.create_subprocess_exec(
-            actual_python,
-            entry,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=project_dir,
-            env=env,
-        )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
-
-        output = stdout.decode(errors="replace")
-        errors = stderr.decode(errors="replace")
-
-        if process.returncode == 0:
-            result = (
-                f"✅ Success (exit 0)\n\n--- stdout ---\n{output}"
-                if output
-                else "✅ Success (no output)"
-            )
-            await emitter.emit(
-                run_id,
-                node_id,
-                "complete",
-                output_str=result,
-                metadata={"exit_code": 0, "project_id": project_id, "venv": venv_ok},
-            )
-            return {
-                "status": "success",
-                "output": output,
-                "exit_code": 0,
-                "venv": venv_ok,
-            }
-        else:
-            result = f"❌ Failed (exit {process.returncode})\n\n--- stderr ---\n{errors}\n--- stdout ---\n{output}"
-            await emitter.emit(run_id, node_id, "error", error=result)
-            return {
-                "status": "error",
-                "output": output,
-                "errors": errors,
-                "exit_code": process.returncode,
-                "venv": venv_ok,
-            }
-
-    except asyncio.TimeoutError:
-        await emitter.emit(run_id, node_id, "error", error="⏱️ Timeout (60s)")
-        return {"status": "error", "output": "Timeout after 60s", "venv": venv_ok}
-    except Exception as e:
-        await emitter.emit(run_id, node_id, "error", error=f"Runtime: {str(e)}")
-        return {"status": "error", "output": str(e), "venv": venv_ok}
+    return result
 
 
 async def autofix_loop_async(run_id: str, project_id: str, max_retries: int = 2):
@@ -596,6 +385,13 @@ async def autofix_loop_async(run_id: str, project_id: str, max_retries: int = 2)
 
         with open(entry_path, "w") as f:
             f.write(patched)
+
+        # Save diff for the fix
+        try:
+            from services.diff import save_diff
+            save_diff(project_id, entry, original_code, patched, attempt)
+        except Exception:
+            pass
 
         await emitter.emit(
             run_id,

@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useMemo } from 'react';
-import { ReactFlow, Controls, Background, useNodesState, useEdgesState, addEdge } from '@xyflow/react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ReactFlow, Controls, Background, useNodesState, useEdgesState, addEdge, useReactFlow, ReactFlowProvider } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import { useAgentStore } from '../store/useAgentStore';
 import CustomNode from './CustomNode';
 import NodeInspectorPanel from './NodeInspectorPanel';
@@ -17,82 +18,79 @@ const AGENT_MODELS = {
 };
 
 const INITIAL_NODES = [
-  { id: 'input', data: { label: 'User Request', stateData: { status: 'idle', output: 'Awaiting prompt...' } }, type: 'custom', position: { x: 50, y: 150 } },
-  { id: 'manager', data: { label: `Manager AI (${AGENT_MODELS.manager})` }, type: 'custom', position: { x: 450, y: 150 } },
-  { id: 'coder', data: { label: `Coder (${AGENT_MODELS.coder})` }, type: 'custom', position: { x: 900, y: -20 } },
-  { id: 'analyst', data: { label: `Analyst (${AGENT_MODELS.analyst})` }, type: 'custom', position: { x: 900, y: 350 } },
-  { id: 'critic', data: { label: `Critic (${AGENT_MODELS.critic})` }, type: 'custom', position: { x: 900, y: 720 } },
-  { id: 'tool', data: { label: `Tool Agent (${AGENT_MODELS.tool})` }, type: 'custom', position: { x: 1350, y: -20 } },
-  { id: 'executor', data: { label: `Executor (${AGENT_MODELS.executor})` }, type: 'custom', position: { x: 1350, y: 350 } }
+  { id: 'input', data: { label: 'User Input', stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 50, y: 200 } },
+  { id: 'manager', data: { label: 'Manager', model: AGENT_MODELS.manager, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 400, y: 200 } },
+  { id: 'coder', data: { label: 'Coder', model: AGENT_MODELS.coder, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 800, y: 50 } },
+  { id: 'analyst', data: { label: 'Analyst', model: AGENT_MODELS.analyst, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 800, y: 250 } },
+  { id: 'critic', data: { label: 'Critic', model: AGENT_MODELS.critic, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 800, y: 450 } },
+  { id: 'tool', data: { label: 'Tool', model: AGENT_MODELS.tool, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 1200, y: 50 } },
+  { id: 'executor', data: { label: 'Executor', model: AGENT_MODELS.executor, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 1200, y: 250 } },
 ];
 
 const INITIAL_EDGES = [
-  { id: 'e-in-m', source: 'input', target: 'manager', style: { stroke: '#333', strokeWidth: 2 } },
-  { id: 'e-m-c', source: 'manager', target: 'coder', style: { stroke: '#333', strokeWidth: 2 } },
-  { id: 'e-m-a', source: 'manager', target: 'analyst', style: { stroke: '#333', strokeWidth: 2 } },
-  { id: 'e-m-cr', source: 'manager', target: 'critic', style: { stroke: '#333', strokeWidth: 2 } },
-  { id: 'e-c-t', source: 'coder', target: 'tool', style: { stroke: '#333', strokeWidth: 2 } },
-  { id: 'e-t-x', source: 'tool', target: 'executor', style: { stroke: '#333', strokeWidth: 2 } },
+  { id: 'e-in-m', source: 'input', target: 'manager' },
+  { id: 'e-m-c', source: 'manager', target: 'coder' },
+  { id: 'e-m-a', source: 'manager', target: 'analyst' },
+  { id: 'e-m-cr', source: 'manager', target: 'critic' },
+  { id: 'e-c-t', source: 'coder', target: 'tool' },
+  { id: 'e-t-x', source: 'tool', target: 'executor' },
 ];
 
-export default function AgentCanvas() {
-  const { nodesState, selectedNodeId, configuredModels } = useAgentStore();
-
+function CanvasInner({ isFullscreen, setIsFullscreen }) {
+  const { nodesState, selectedNodeId, activeRunId, updateNode } = useAgentStore();
   const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES);
+  const [rfInstance, setRfInstance] = useState(null);
+  const { deleteElements } = useReactFlow();
 
-  // Sync Zustand state to node data (labels + stateData)
+  // Sync runtime store state into node data
   useEffect(() => {
-    setNodes((nds) => nds.map((n) => {
-      const baseLabel = n.id === 'manager' ? `Manager AI (${AGENT_MODELS.manager})` :
-                        n.id === 'coder' ? `Coder (${AGENT_MODELS.coder})` :
-                        n.id === 'analyst' ? `Analyst (${AGENT_MODELS.analyst})` :
-                        n.id === 'critic' ? `Critic (${AGENT_MODELS.critic})` :
-                        n.id === 'tool' ? `Tool Agent (${AGENT_MODELS.tool})` :
-                        n.id === 'executor' ? `Executor (${AGENT_MODELS.executor})` : n.data.label;
-      const label = configuredModels && configuredModels[n.id] ? `${baseLabel} → ${configuredModels[n.id]}` : baseLabel;
-      const stateData = nodesState[n.id] || n.data.stateData;
-      return { ...n, data: { ...n.data, label, stateData } };
+    setNodes(nds => nds.map(n => {
+      const storeState = nodesState[n.id];
+      if (storeState) {
+        return { ...n, data: { ...n.data, stateData: storeState } };
+      }
+      return n;
     }));
-  }, [nodesState, configuredModels]);
+  }, [nodesState]);
 
-  // Compute edge styles from state
+  // Animate edges based on active pipeline
   useEffect(() => {
     let routeTarget = null;
     try {
-      if (nodesState.manager.status === 'success' && typeof nodesState.manager.output === 'string') {
-        const decision = JSON.parse(nodesState.manager.output);
-        if (decision && decision.selected_agent) routeTarget = decision.selected_agent;
+      if (nodesState.manager?.status === 'success' && typeof nodesState.manager.output === 'string') {
+        const d = JSON.parse(nodesState.manager.output);
+        if (d?.selected_agent) routeTarget = d.selected_agent;
       }
-    } catch (e) {}
+    } catch (e) {
+      // ignore
+    }
 
-    setEdges((eds) => eds.map((e) => {
+    setEdges(eds => eds.map(e => {
+      const glow = (color, rgb) => ({
+        stroke: color, strokeWidth: 2,
+        filter: `drop-shadow(0 0 6px rgba(${rgb},0.8))`
+      });
+      const dim = { stroke: '#21262d', strokeWidth: 1, opacity: 0.35, filter: 'none' };
       if (e.id === 'e-in-m') {
-        return {
-          ...e,
-          animated: nodesState.manager.status === 'running',
-          style: { stroke: nodesState.manager.status !== 'idle' ? '#00f0ff' : '#333', strokeWidth: 3 }
-        };
+        const active = nodesState.manager?.status !== 'idle';
+        return { ...e, animated: nodesState.manager?.status === 'running', style: active ? glow('#58a6ff', '88,166,255') : { stroke: '#30363d', strokeWidth: 1.5 } };
       }
-      if (e.target === 'coder') {
-        const isActive = routeTarget === 'coder' || nodesState.coder.status !== 'idle';
-        return { ...e, animated: nodesState.coder.status === 'running', style: { stroke: isActive ? '#a855f7' : '#222', strokeWidth: isActive ? 3 : 1, opacity: isActive ? 1 : 0.2 } };
-      }
-      if (e.target === 'analyst') {
-        const isActive = routeTarget === 'analyst' || nodesState.analyst?.status !== 'idle';
-        return { ...e, animated: nodesState.analyst?.status === 'running', style: { stroke: isActive ? '#22c55e' : '#222', strokeWidth: isActive ? 3 : 1, opacity: isActive ? 1 : 0.2 } };
-      }
-      if (e.target === 'critic') {
-        const isActive = routeTarget === 'critic' || nodesState.critic?.status !== 'idle';
-        return { ...e, animated: nodesState.critic?.status === 'running', style: { stroke: isActive ? '#f59e0b' : '#222', strokeWidth: isActive ? 3 : 1, opacity: isActive ? 1 : 0.2 } };
+      const targetAgent = e.target;
+      const ns = nodesState[targetAgent];
+      if (['coder', 'analyst', 'critic'].includes(targetAgent)) {
+        const isActive = routeTarget === targetAgent || ns?.status !== 'idle';
+        const colors = { coder: ['#a371f7', '163,113,247'], analyst: ['#3fb950', '63,185,80'], critic: ['#d29922', '210,153,34'] };
+        const [c, rgb] = colors[targetAgent] || ['#58a6ff', '88,166,255'];
+        return { ...e, animated: ns?.status === 'running', style: isActive ? glow(c, rgb) : dim };
       }
       if (e.id === 'e-c-t') {
         const isActive = nodesState.tool?.status !== 'idle';
-        return { ...e, animated: nodesState.tool?.status === 'running', style: { stroke: isActive ? '#ec4899' : '#111', strokeWidth: isActive ? 3 : 1, opacity: isActive ? 1 : 0.1 } };
+        return { ...e, animated: nodesState.tool?.status === 'running', style: isActive ? glow('#db61a2', '219,97,162') : dim };
       }
       if (e.id === 'e-t-x') {
         const isActive = nodesState.executor?.status !== 'idle';
-        return { ...e, animated: nodesState.executor?.status === 'running', style: { stroke: isActive ? '#06b6d4' : '#111', strokeWidth: isActive ? 3 : 1, opacity: isActive ? 1 : 0.1 } };
+        return { ...e, animated: nodesState.executor?.status === 'running', style: isActive ? glow('#58a6ff', '88,166,255') : dim };
       }
       return e;
     }));
@@ -103,29 +101,60 @@ export default function AgentCanvas() {
   }, []);
 
   const onConnect = useCallback((params) => {
-    setEdges((eds) => addEdge({ ...params, style: { stroke: '#00f0ff', strokeWidth: 2, opacity: 0.6 } }, eds));
+    setEdges(eds => addEdge({
+      ...params,
+      style: { stroke: '#58a6ff', strokeWidth: 2, opacity: 0.7, filter: 'drop-shadow(0 0 4px rgba(88,166,255,0.5))' }
+    }, eds));
   }, [setEdges]);
 
+  const onDragOver = useCallback((event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onDrop = useCallback((event) => {
+    event.preventDefault();
+    const type = event.dataTransfer.getData('application/reactflow');
+    const label = event.dataTransfer.getData('application/reactflow-label');
+    const model = event.dataTransfer.getData('application/reactflow-model');
+    if (!type || !rfInstance) return;
+    const position = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const newNode = {
+      id: `node-${Date.now()}`,
+      type,
+      position,
+      data: { label, model: model || '', stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } },
+    };
+    setNodes(nds => nds.concat(newNode));
+    updateNode(activeRunId || 'none', newNode.id, { status: 'idle', input: '', output: '', error: '' });
+  }, [rfInstance, setNodes, activeRunId, updateNode]);
+
+  // Delete selected node with Backspace/Delete
+  useEffect(() => {
+    const handleKey = (e) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId) {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+        deleteElements({ nodes: [{ id: selectedNodeId }] });
+        useAgentStore.getState().setSelectedNode(null);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selectedNodeId, deleteElements]);
+
+  // Reset all nodes to idle when a new run starts
+  useEffect(() => {
+    if (activeRunId) {
+      setNodes(nds => nds.map(n => ({
+        ...n,
+        data: { ...n.data, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } },
+      })));
+    }
+  }, [activeRunId]);
+
   return (
-    <div className="flex-1 h-full relative rounded-2xl glass-panel bg-black/50 border border-white/5 shadow-[inset_0_4px_30px_rgba(0,0,0,0.8),0_0_40px_rgba(0,240,255,0.05)] z-10 p-1 font-mono overflow-hidden">
-      {/* Animated corner accents */}
-      <div className="absolute top-0 left-0 w-16 h-16 pointer-events-none">
-        <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-cyan-400/50 to-transparent" />
-        <div className="absolute top-0 left-0 w-[1px] h-full bg-gradient-to-b from-cyan-400/50 to-transparent" />
-      </div>
-      <div className="absolute top-0 right-0 w-16 h-16 pointer-events-none">
-        <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-purple-400/50 to-transparent" />
-        <div className="absolute top-0 right-0 w-[1px] h-full bg-gradient-to-b from-purple-400/50 to-transparent" />
-      </div>
-      <div className="absolute bottom-0 left-0 w-16 h-16 pointer-events-none">
-        <div className="absolute bottom-0 left-0 w-full h-[1px] bg-gradient-to-r from-pink-400/50 to-transparent" />
-        <div className="absolute bottom-0 left-0 w-[1px] h-full bg-gradient-to-t from-pink-400/50 to-transparent" />
-      </div>
-      <div className="absolute bottom-0 right-0 w-16 h-16 pointer-events-none">
-        <div className="absolute bottom-0 right-0 w-full h-[1px] bg-gradient-to-l from-green-400/50 to-transparent" />
-        <div className="absolute bottom-0 right-0 w-[1px] h-full bg-gradient-to-t from-green-400/50 to-transparent" />
-      </div>
-      
+    <div className="flex-1 h-full relative rounded-lg overflow-hidden border border-[#58a6ff]/20 shadow-[inset_0_0_60px_rgba(88,166,255,0.04)]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -133,17 +162,38 @@ export default function AgentCanvas() {
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onConnect={onConnect}
+        onInit={setRfInstance}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
         onPaneClick={() => useAgentStore.getState().setSelectedNode(null)}
         nodeTypes={nodeTypes}
         fitView
-        minZoom={0.2}
-        className="filter sepia-[10%] hue-rotate-15 bg-[#050505]"
+        minZoom={0.1}
+        deleteKeyCode={null}
+        className="gradient-bg-animated"
+        proOptions={{ hideAttribution: true }}
       >
-        <Background color="#fff" gap={24} size={1} opacity={0.07} />
-        <Controls className="bg-black/90 border-white/10 rounded-lg shadow-2xl overflow-hidden [&>button]:border-white/10 [&>button]:text-gray-300 [&>button:hover]:bg-white/10" />
+        <Background color="rgba(88,166,255,0.12)" gap={28} size={1.2} variant="cross" />
+        <Controls className="glass-strong border border-[#30363d]/50 rounded-lg overflow-hidden [&>button]:border-[#30363d]/50 [&>button]:text-[#8b949e] [&>button:hover]:bg-[#161b22] [&>button:hover]:text-[#c9d1d9]" />
       </ReactFlow>
+
+      <button
+        onClick={() => setIsFullscreen(!isFullscreen)}
+        className="absolute top-2 right-2 z-20 p-1.5 rounded glass-strong border border-[#30363d]/50 text-[#6e7681] hover:text-[#c9d1d9] hover:border-[#58a6ff]/40 transition-all"
+        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen canvas'}
+      >
+        {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+      </button>
 
       {selectedNodeId && <NodeInspectorPanel />}
     </div>
+  );
+}
+
+export default function AgentCanvas({ isFullscreen, setIsFullscreen }) {
+  return (
+    <ReactFlowProvider>
+      <CanvasInner isFullscreen={isFullscreen} setIsFullscreen={setIsFullscreen} />
+    </ReactFlowProvider>
   );
 }

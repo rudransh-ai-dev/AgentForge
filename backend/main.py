@@ -12,7 +12,7 @@ All models are VRAM-scheduled through the global pipeline lock.
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -22,6 +22,8 @@ import json
 import os
 import shutil
 import asyncio
+import zipfile
+import io
 
 from schemas.request import Query, NodeQuery
 from core.orchestrator import run_direct_mode, run_agent_mode, pipeline_lock
@@ -33,6 +35,27 @@ from agents.tool import run_tool_agent_async, execute_project_async, autofix_loo
 from agents.reader import run_reader_async
 from services.event_emitter import emitter
 from core.memory import store_run, update_pattern, get_run_history, get_stats
+from core.memory_manager import get_db_health, cleanup_old_data
+from core.chat_memory import (
+    create_session as create_chat_session,
+    get_session as get_chat_session,
+    list_sessions as list_chat_sessions,
+    get_messages,
+    add_message,
+    delete_session as delete_chat_session,
+    clear_all_sessions,
+    get_summary,
+    set_summary,
+)
+from core.agent_memory import (
+    get_knowledge, delete_knowledge, get_patterns, get_fixes,
+    delete_fixes, reset_agent_memory, store_fix, store_knowledge,
+    update_pattern as update_agent_pattern,
+)
+from core.canvas_memory import (
+    get_run, get_run_steps, get_recent_runs, get_active_run,
+    delete_run, clear_all_runs,
+)
 from core.session import (
     create_session,
     get_session,
@@ -97,8 +120,17 @@ def root():
 
 @app.on_event("startup")
 async def startup_sync_registry():
-    """Sync model registry from Ollama on server boot."""
+    """Seed DB schemas and sync model registry from Ollama on server boot."""
+    from core.memory_manager import init_all
+    from services.mcp_client import mcp_manager
+    init_all()
     await sync_model_registry()
+    await mcp_manager.initialize_all()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    from services.mcp_client import mcp_manager
+    await mcp_manager.close()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -197,6 +229,12 @@ class RunRequest(BaseModel):
     session_id: Optional[str] = None
     model: Optional[str] = None
     allow_heavy: bool = False
+
+
+class ChatMessage(BaseModel):
+    message: str
+    model: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 @app.post("/run")
@@ -398,6 +436,276 @@ def delete_workspace_file(project_id: str, filename: str):
     return {"error": "File not found"}
 
 
+@app.get("/workspace/export/{project_id}")
+def export_project(project_id: str):
+    """Export a project as a zip file."""
+    project_dir = os.path.join(WORKSPACE_DIR, project_id)
+    if not os.path.exists(project_dir):
+        return {"error": "Project not found"}
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", ".mypy_cache"}
+        for root, dirs, filenames in os.walk(project_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for fn in filenames:
+                full_path = os.path.join(root, fn)
+                arcname = os.path.relpath(full_path, project_dir)
+                zf.write(full_path, arcname)
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={project_id}.zip"},
+    )
+
+
+@app.get("/workspace/export-all")
+def export_all_projects():
+    """Export all projects as a single zip file."""
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", ".mypy_cache"}
+        for item in sorted(os.listdir(WORKSPACE_DIR)):
+            item_path = os.path.join(WORKSPACE_DIR, item)
+            if item.startswith(".") or not os.path.isdir(item_path):
+                continue
+            for root, dirs, filenames in os.walk(item_path):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                for fn in filenames:
+                    full_path = os.path.join(root, fn)
+                    arcname = os.path.relpath(full_path, WORKSPACE_DIR)
+                    zf.write(full_path, arcname)
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=workspace.zip"},
+    )
+
+
+@app.post("/workspace/import")
+async def import_project(file: UploadFile = File(...)):
+    """Import a project from a zip file."""
+    if not file.filename.endswith(".zip"):
+        return {"error": "Only zip files are supported"}
+
+    try:
+        contents = await file.read()
+        zip_buffer = io.BytesIO(contents)
+        with zipfile.ZipFile(zip_buffer, "r") as zf:
+            project_name = os.path.splitext(file.filename)[0]
+            project_dir = os.path.join(WORKSPACE_DIR, project_name)
+            os.makedirs(project_dir, exist_ok=True)
+            zf.extractall(project_dir)
+        return {"status": "imported", "project_id": project_name}
+    except Exception as e:
+        return {"error": f"Failed to import: {str(e)}"}
+
+
+@app.get("/executors")
+def list_executors():
+    """List supported execution languages."""
+    from services.executor import RUNNERS
+    runners = []
+    for runner in RUNNERS:
+        runners.append({
+            "language": runner.language,
+            "available": os.system(f"which {runner.language} > /dev/null 2>&1") == 0 if runner.language != "python" else True,
+        })
+    return {"runners": runners}
+
+
+# ══════════════════════════════════════════════════════════════
+# METRICS API
+# ══════════════════════════════════════════════════════════════
+
+
+@app.get("/metrics/overview")
+def metrics_overview():
+    """Summary stats."""
+    from services.metrics import get_overview
+    return get_overview()
+
+
+@app.get("/metrics/latency")
+def metrics_latency():
+    """Latency timeseries data."""
+    from services.metrics import get_latency_timeseries
+    return get_latency_timeseries()
+
+
+@app.get("/metrics/vram")
+def metrics_vram():
+    """VRAM usage timeseries."""
+    from services.metrics import get_vram_timeseries
+    return get_vram_timeseries()
+
+
+@app.get("/metrics/models")
+def metrics_models():
+    """Per-model performance breakdown."""
+    from services.metrics import get_model_breakdown
+    return get_model_breakdown()
+
+
+@app.get("/metrics/tasks")
+def metrics_tasks():
+    """Task type distribution."""
+    from services.metrics import get_task_distribution
+    return get_task_distribution()
+
+
+@app.get("/metrics/recent")
+def metrics_recent():
+    """Recent runs."""
+    from services.metrics import get_recent_runs
+    return get_recent_runs()
+
+
+# ══════════════════════════════════════════════════════════════
+# CUSTOM AGENTS API
+# ══════════════════════════════════════════════════════════════
+
+
+CUSTOM_AGENTS_FILE = os.path.join(os.path.dirname(__file__), "custom_agents.json")
+
+
+def load_custom_agents():
+    if os.path.exists(CUSTOM_AGENTS_FILE):
+        with open(CUSTOM_AGENTS_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+
+def save_custom_agents(agents):
+    with open(CUSTOM_AGENTS_FILE, "w") as f:
+        json.dump(agents, f, indent=2)
+
+
+@app.get("/custom-agents")
+def list_custom_agents():
+    agents = load_custom_agents()
+    return {"agents": agents}
+
+
+@app.post("/custom-agents")
+def create_custom_agent(body: dict):
+    agents = load_custom_agents()
+    agent_id = body.get("name", "agent").lower().replace(" ", "_")
+    agent = {
+        "id": agent_id,
+        "name": body.get("name", "Custom Agent"),
+        "model": body.get("model", "qwen2.5:14b"),
+        "system_prompt": body.get("system_prompt", ""),
+        "color": body.get("color", "#58a6ff"),
+        "icon": body.get("icon", "Cpu"),
+        "created_at": time.time(),
+    }
+    agents.append(agent)
+    save_custom_agents(agents)
+    return {"status": "created", "agent": agent}
+
+
+@app.put("/custom-agents/{agent_id}")
+def update_custom_agent(agent_id: str, body: dict):
+    agents = load_custom_agents()
+    for i, agent in enumerate(agents):
+        if agent["id"] == agent_id:
+            agents[i].update({
+                "name": body.get("name", agent["name"]),
+                "model": body.get("model", agent["model"]),
+                "system_prompt": body.get("system_prompt", agent["system_prompt"]),
+                "color": body.get("color", agent["color"]),
+                "icon": body.get("icon", agent["icon"]),
+            })
+            save_custom_agents(agents)
+            return {"status": "updated", "agent": agents[i]}
+    return {"error": "Agent not found"}
+
+
+@app.delete("/custom-agents/{agent_id}")
+def delete_custom_agent(agent_id: str):
+    agents = load_custom_agents()
+    agents = [a for a in agents if a["id"] != agent_id]
+    save_custom_agents(agents)
+    return {"status": "deleted"}
+
+
+# ══════════════════════════════════════════════════════════════
+# DIFF API
+# ══════════════════════════════════════════════════════════════
+
+
+@app.get("/workspace/{project_id}/diffs")
+def list_project_diffs(project_id: str):
+    """List all diffs for a project."""
+    from services.diff import get_diffs_for_project
+    return {"diffs": get_diffs_for_project(project_id)}
+
+
+@app.get("/workspace/{project_id}/diffs/{diff_id}")
+def get_project_diff(project_id: str, diff_id: str):
+    """Get a specific diff."""
+    from services.diff import get_diff
+    diff = get_diff(project_id, diff_id)
+    if not diff:
+        return {"error": "Diff not found"}
+    return diff
+
+
+# ══════════════════════════════════════════════════════════════
+# PROMPT VERSIONING API
+# ══════════════════════════════════════════════════════════════
+
+
+@app.get("/prompts/{agent_id}/versions")
+def get_prompt_versions(agent_id: str, prompt_type: str = "chat"):
+    from core.prompt_versions import get_versions
+    return {"versions": get_versions(agent_id, prompt_type)}
+
+
+@app.get("/prompts/{agent_id}/versions/{version}")
+def get_prompt_version(agent_id: str, version: int, prompt_type: str = "chat"):
+    from core.prompt_versions import get_version
+    v = get_version(agent_id, version, prompt_type)
+    if not v:
+        return {"error": "Version not found"}
+    return v
+
+
+@app.post("/prompts/{agent_id}/versions")
+def save_prompt_version(agent_id: str, body: dict):
+    from core.prompt_versions import save_version
+    note = body.get("note", "")
+    prompt_text = body.get("prompt_text", "")
+    prompt_type = body.get("prompt_type", "chat")
+    if not prompt_text:
+        return {"error": "prompt_text is required"}
+    new_version = save_version(agent_id, prompt_text, prompt_type, note)
+    return {"status": "saved", "version": new_version}
+
+
+@app.get("/prompts/{agent_id}/diff")
+def get_prompt_diff(agent_id: str, from_version: int, to_version: int, prompt_type: str = "chat"):
+    from core.prompt_versions import get_diff
+    d = get_diff(agent_id, from_version, to_version, prompt_type)
+    if not d:
+        return {"error": "Version not found"}
+    return d
+
+
+@app.put("/prompts/{agent_id}/rollback/{version}")
+def rollback_prompt(agent_id: str, version: int, prompt_type: str = "chat"):
+    from core.prompt_versions import rollback_to
+    new_version = rollback_to(agent_id, version, prompt_type)
+    if new_version is None:
+        return {"error": "Version not found"}
+    return {"status": "rolled_back", "new_version": new_version}
+
+
 # ══════════════════════════════════════════════════════════════
 # EXECUTION API
 # ══════════════════════════════════════════════════════════════
@@ -432,8 +740,176 @@ def memory_history():
 
 @app.get("/memory/stats")
 def memory_stats():
-    """Get aggregate system intelligence stats."""
-    return get_stats()
+    """Get aggregate system intelligence stats from all 4 memory domains."""
+    base = get_stats()
+    health = get_db_health()
+    active = get_active_run()
+    return {
+        **base,
+        "db_size_mb": health.get("total_size_mb", 0),
+        "table_counts": health.get("tables", {}),
+        "active_run": active["run_id"] if active else None,
+    }
+
+
+@app.get("/memory/health")
+def memory_health():
+    """Get database health metrics."""
+    return get_db_health()
+
+
+@app.post("/memory/cleanup")
+def memory_cleanup(chat_ttl: int = 7, metrics_ttl: int = 30, canvas_ttl: int = 30):
+    """Run TTL cleanup job."""
+    deleted = cleanup_old_data(chat_ttl, metrics_ttl, canvas_ttl)
+    return {"status": "cleaned", "deleted": deleted}
+
+
+@app.post("/memory/backup")
+def memory_backup():
+    """Export database as downloadable file."""
+    db_path = os.path.join(os.path.dirname(__file__), "memory.db")
+    if not os.path.exists(db_path):
+        return {"error": "Database not found"}
+    return FileResponse(db_path, filename="memory_backup.db", media_type="application/octet-stream")
+
+
+# ══════════════════════════════════════════════════════════════
+# CHAT MEMORY API
+# ══════════════════════════════════════════════════════════════
+
+
+class CreateChatSession(BaseModel):
+    mode: Optional[str] = "persona"
+    selected_agent: Optional[str] = ""
+    selected_model: Optional[str] = ""
+    persona_key: Optional[str] = ""
+    direct_model: Optional[str] = ""
+
+
+@app.post("/chat/sessions")
+def new_chat_session(body: CreateChatSession):
+    sid = create_chat_session(
+        mode=body.mode,
+        selected_agent=body.selected_agent,
+        selected_model=body.selected_model,
+        persona_key=body.persona_key,
+        direct_model=body.direct_model,
+    )
+    return {"session_id": sid}
+
+
+@app.get("/chat/sessions")
+def list_chat_sessions_endpoint(limit: int = 20):
+    return {"sessions": list_chat_sessions(limit)}
+
+
+# ══════════════════════════════════════════════════════════════
+# MCP API
+# ══════════════════════════════════════════════════════════════
+
+
+@app.get("/mcp/tools")
+async def list_mcp_tools():
+    """List all tools available across configured MCP servers."""
+    from services.mcp_client import mcp_manager
+    tools = await mcp_manager.get_all_tools()
+    return {"tools": tools}
+
+
+@app.post("/mcp/call/{server_name}/{tool_name}")
+async def call_mcp_tool(server_name: str, tool_name: str, body: dict):
+    """Call a specific MCP tool."""
+    from services.mcp_client import mcp_manager
+    try:
+        result = await mcp_manager.call_tool(server_name, tool_name, body)
+        # Assuming the result is serializable, otherwise just return string
+        return {"status": "success", "result": str(result)}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/chat/sessions/{session_id}")
+def get_chat_session_endpoint(session_id: str):
+    session = get_chat_session(session_id)
+    if not session:
+        return {"error": "Session not found"}
+    messages = get_messages(session_id, limit=200)
+    summary = get_summary(session_id)
+    return {**session, "messages": messages, "summary": summary}
+
+
+@app.delete("/chat/sessions/{session_id}")
+def delete_chat_session_endpoint(session_id: str):
+    delete_chat_session(session_id)
+    return {"status": "deleted"}
+
+
+# ══════════════════════════════════════════════════════════════
+# AGENT MEMORY API
+# ══════════════════════════════════════════════════════════════
+
+
+@app.get("/agents/{agent_id}/knowledge")
+def get_agent_knowledge(agent_id: str, limit: int = 20):
+    return {"knowledge": get_knowledge(agent_id, limit)}
+
+
+@app.delete("/agents/{agent_id}/knowledge")
+def delete_agent_knowledge(agent_id: str):
+    delete_knowledge(agent_id)
+    return {"status": "deleted"}
+
+
+@app.get("/agents/{agent_id}/patterns")
+def get_agent_patterns(agent_id: str):
+    return {"patterns": get_patterns(agent_id)}
+
+
+@app.get("/agents/{agent_id}/fixes")
+def get_agent_fixes(agent_id: str, limit: int = 20):
+    return {"fixes": get_fixes(agent_id, limit)}
+
+
+@app.delete("/agents/{agent_id}/memory")
+def reset_agent_memory_endpoint(agent_id: str):
+    reset_agent_memory(agent_id)
+    return {"status": "reset"}
+
+
+# ══════════════════════════════════════════════════════════════
+# CANVAS MEMORY API
+# ══════════════════════════════════════════════════════════════
+
+
+@app.get("/canvas/runs")
+def list_canvas_runs(limit: int = 20):
+    return {"runs": get_recent_runs(limit)}
+
+
+@app.get("/canvas/runs/{run_id}")
+def get_canvas_run(run_id: str):
+    run = get_run(run_id)
+    if not run:
+        return {"error": "Run not found"}
+    steps = get_run_steps(run_id)
+    return {**run, "steps": steps}
+
+
+@app.get("/canvas/runs/{run_id}/steps")
+def get_canvas_run_steps(run_id: str):
+    return {"steps": get_run_steps(run_id)}
+
+
+@app.delete("/canvas/runs/{run_id}")
+def delete_canvas_run(run_id: str):
+    delete_run(run_id)
+    return {"status": "deleted"}
+
+
+@app.delete("/canvas/runs")
+def clear_canvas_runs():
+    clear_all_runs()
+    return {"status": "cleared"}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -468,12 +944,6 @@ def list_all_sessions():
 # ══════════════════════════════════════════════════════════════
 
 
-class ChatMessage(BaseModel):
-    message: str
-    model: Optional[str] = None
-    session_id: Optional[str] = None
-
-
 @app.post("/agent/{agent_id}/chat")
 async def agent_chat(agent_id: str, body: ChatMessage):
     """Direct streaming chat with any agent. Returns SSE stream."""
@@ -497,9 +967,15 @@ async def agent_chat(agent_id: str, body: ChatMessage):
     full_prompt = f"{system_instruction}\n\nUser: {body.message}"
 
     async def stream_gen():
+        full_response = ""
         async for chunk in scheduled_generate(model, full_prompt):
+            full_response += chunk
             yield f"data: {json.dumps({'chunk': chunk})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
+
+        if body.session_id:
+            add_message(body.session_id, role="user", content=body.message, agent_id=agent_id, model=model)
+            add_message(body.session_id, role="assistant", content=full_response, agent_id=agent_id, model=model)
 
     return StreamingResponse(stream_gen(), media_type="text/event-stream")
 
@@ -521,7 +997,7 @@ async def stop_all():
 
     # Emit stop events for all active nodes so UI resets
     for node_id in ["manager", "coder", "analyst", "critic", "tool", "executor"]:
-        await emitter.emit(node_id, node_id, "error", error="Execution stopped by user")
+        await emitter.emit("system", node_id, "error", error="Execution stopped by user")
 
     await emitter.emit(
         "system",
@@ -530,3 +1006,12 @@ async def stop_all():
         error=f"Execution terminated by user ({cancelled} tasks cancelled)",
     )
     return {"status": "stopped", "cancelled": cancelled}
+
+
+# ══════════════════════════════════════════════════════════════
+# CHAT SERVER — Mounted as sub-app (Persona / AI Friends)
+# ══════════════════════════════════════════════════════════════
+
+from chat_server import app as chat_app
+
+app.mount("/persona", chat_app)

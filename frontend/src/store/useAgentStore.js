@@ -27,6 +27,24 @@ export const useAgentStore = create((set) => ({
   isEditing: false,
   editContent: '',
 
+  // Chat sessions
+  chatSessions: [],
+  activeChatSessionId: null,
+  agentMessages: [],
+  simpleMessages: [],
+  setChatSessions: (sessions) => set({ chatSessions: sessions }),
+  setActiveChatSessionId: (id) => set({ activeChatSessionId: id }),
+  setAgentMessages: (updater) => set((state) => ({ 
+    agentMessages: typeof updater === 'function' ? updater(state.agentMessages) : updater 
+  })),
+  setSimpleMessages: (updater) => set((state) => ({ 
+    simpleMessages: typeof updater === 'function' ? updater(state.simpleMessages) : updater 
+  })),
+
+  // Canvas history
+  canvasRuns: [],
+  setCanvasRuns: (runs) => set({ canvasRuns: runs }),
+
   setSelectedNode: (id) => set({ selectedNodeId: id }),
   setProjects: (projects) => set({ projects }),
   setSelectedProject: (p) => set({ selectedProject: p, selectedFile: null, fileContent: '' }),
@@ -47,9 +65,12 @@ export const useAgentStore = create((set) => ({
     executionLog: [...state.executionLog, event]
   })),
 
+  clearExecutionLog: () => set({ executionLog: [], activeRunId: null }),
+
   resetAll: () => set({
     nodesState: { ...INITIAL_NODES_STATE },
     activeRunId: null,
     executionLog: [],
+    selectedNodeId: null,
   }),
 }));

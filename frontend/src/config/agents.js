@@ -1,7 +1,7 @@
 import { Cpu, Terminal, BarChart3, ShieldCheck } from 'lucide-react';
 
-export const API = "http://127.0.0.1:8888";
-export const CHAT_API = "http://127.0.0.1:8889";
+export const API = "";
+export const CHAT_API = "/persona";
 
 const AGENT_META = [
   { id: "manager", label: "Manager AI", icon: Cpu, color: "#06b6d4", desc: "System Planning" },
