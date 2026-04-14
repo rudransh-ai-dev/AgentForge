@@ -1,0 +1,11 @@
+[
+  {
+    "id": "python_ex",
+    "name": "python ex",
+    "model": "gpt-oss:20b",
+    "system_prompt": "you do python codes ",
+    "color": "#58a6ff",
+    "icon": "Cpu",
+    "created_at": 1776078972.7512357
+  }
+]

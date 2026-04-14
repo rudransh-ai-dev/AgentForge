@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Cpu, FileCode2, Zap, MessageSquare, BrainCircuit,
-  ChevronLeft, ChevronRight, Layers, Plus, Wrench
+  ChevronLeft, ChevronRight, Layers, Plus, Wrench, Sparkles
 } from 'lucide-react';
 import { useAgentStore } from '../store/useAgentStore';
 
@@ -15,37 +15,64 @@ const NODE_TYPES = [
   },
   {
     type: 'custom',
-    label: 'LLM Agent',
+    label: 'Orchestrator',
     icon: Cpu,
-    color: '#a371f7',
-    description: 'General purpose AI agent (choose model in config)',
+    color: '#06b6d4',
+    description: 'Manager — routes tasks & creates execution plans',
+    model: 'llama3.1:8b',
   },
   {
     type: 'custom',
-    label: 'Coder',
+    label: 'Senior Coder',
     icon: FileCode2,
-    color: '#3fb950',
-    description: 'Specialized code generation agent',
+    color: '#a855f7',
+    description: 'Writer agent — drafts full-stack code',
+    model: 'qwen2.5-coder:14b',
   },
   {
     type: 'custom',
-    label: 'Tool Node',
-    icon: Wrench,
+    label: 'Code Editor',
+    icon: FileCode2,
+    color: '#db2777',
+    description: 'Editor agent — refines & fixes code',
+    model: 'qwen2.5-coder:14b',
+  },
+  {
+    type: 'custom',
+    label: 'QA Tester',
+    icon: Zap,
     color: '#d29922',
-    description: 'Executes a script, API call, or shell command',
+    description: 'Tester agent — adversarial QA validation',
+    model: 'deepseek-r1:8b',
   },
   {
     type: 'custom',
-    label: 'Analyst',
+    label: 'Researcher',
     icon: BrainCircuit,
+    color: '#3fb950',
+    description: 'Research & data synthesis agent',
+    model: 'qwen2.5:14b',
+  },
+  {
+    type: 'custom',
+    label: 'Tool Mgr',
+    icon: Wrench,
     color: '#db61a2',
-    description: 'Analyzes, summarizes, and extracts insights',
+    description: 'File system, deps & project structure',
+  },
+  {
+    type: 'custom',
+    label: 'System Architect',
+    icon: BrainCircuit,
+    color: '#6366f1',
+    description: 'Heavy brain for complex architecture',
+    model: 'phi4:latest',
   },
 ];
 
 export default function NodeSidebar() {
   const [collapsed, setCollapsed] = useState(false);
-  const { availableModels } = useAgentStore();
+  const { availableModels, customAgents } = useAgentStore();
 
   const onDragStart = (event, nodeType, label) => {
     event.dataTransfer.setData('application/reactflow', nodeType);
@@ -105,6 +132,38 @@ export default function NodeSidebar() {
               </div>
             );
           })}
+
+          {/* Custom agents section */}
+          {customAgents.length > 0 && (
+            <>
+              <p className="text-[9px] text-[#484f58] uppercase tracking-wider font-medium px-1 pt-3 pb-0.5">Your Agents</p>
+              {customAgents.map((agent) => (
+                <div
+                  key={agent.id}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData('application/reactflow', 'custom');
+                    event.dataTransfer.setData('application/reactflow-label', agent.name);
+                    event.dataTransfer.setData('application/reactflow-model', agent.model);
+                  }}
+                  draggable
+                  className="flex items-center gap-2.5 px-2 py-2 rounded-md border border-[#21262d] bg-[#0d1117]/60 hover:bg-[#161b22] hover:border-[#30363d] cursor-grab active:cursor-grabbing transition-all group select-none"
+                  title={agent.system_prompt?.slice(0, 80) || agent.name}
+                >
+                  <div
+                    className="p-1.5 rounded shrink-0"
+                    style={{ backgroundColor: `${agent.color || '#58a6ff'}18`, border: `1px solid ${agent.color || '#58a6ff'}30` }}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" style={{ color: agent.color || '#58a6ff' }} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-medium text-[#c9d1d9] truncate">{agent.name}</div>
+                    <div className="text-[9px] text-[#484f58] leading-tight line-clamp-1 font-mono">{agent.model}</div>
+                  </div>
+                  <Plus className="w-3 h-3 text-[#484f58] group-hover:text-[#58a6ff] shrink-0 ml-auto transition-colors" />
+                </div>
+              ))}
+            </>
+          )}
 
           {/* Saved agents section */}
           {availableModels.length > 0 && (

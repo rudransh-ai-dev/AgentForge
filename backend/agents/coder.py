@@ -34,7 +34,7 @@ def _is_simple_task(prompt: str) -> bool:
 
 async def run_coder_async(prompt: str, model_override: str | None = None):
     """Generate code using the coder model through the VRAM scheduler."""
-    agent_cfg = MODELS.get("coder", {"name": "deepseek-coder:6.7b"})
+    agent_cfg = MODELS.get("coder", {"name": "qwen2.5-coder:14b"})
     default_model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
     model = model_override or default_model
 

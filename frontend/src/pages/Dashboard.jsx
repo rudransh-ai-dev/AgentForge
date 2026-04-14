@@ -8,12 +8,14 @@ import {
 import AgentCanvas from '../components/AgentCanvas';
 import WorkspaceExplorer from '../components/WorkspaceExplorer';
 import SimpleChat from '../components/SimpleChat';
+import VoiceButton from '../components/VoiceButton';
 import AgentChat from '../components/AgentChat';
 import TimelinePanel from '../components/TimelinePanel';
 import StatusBar from '../components/StatusBar';
 import PerformanceDashboard from '../components/PerformanceDashboard';
 import CustomAgentManager from '../components/CustomAgentManager';
 import NodeSidebar from '../components/NodeSidebar';
+import TopClock from '../components/TopClock';
 import { useAgentStore } from '../store/useAgentStore';
 
 const API = "";
@@ -25,7 +27,7 @@ const pageVariants = {
 };
 const pageTransition = { duration: 0.15, ease: [0.4, 0, 0.2, 1] };
 
-function ConnectionStatus({ health }) {
+function ConnectionStatus({ health, wsStatus }) {
   const [showModels, setShowModels] = useState(false);
   const popoverRef = React.useRef(null);
 
@@ -53,7 +55,7 @@ function ConnectionStatus({ health }) {
         className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium ${s.bg} border ${s.border} ${s.color} transition-colors cursor-pointer`}
       >
         {s.icon}
-        <span className="hidden sm:inline">{s.label}</span>
+        <span className="hidden sm:inline">{wsStatus === 'connecting' ? 'WS Connecting' : wsStatus === 'disconnected' ? 'WS Offline' : s.label}</span>
         {health.models?.length > 0 && (
           <span className="text-fgSubtle hidden md:inline">({health.models.length})</span>
         )}
@@ -150,7 +152,8 @@ export default function Dashboard() {
 
     const connect = () => {
       setWsStatus('connecting');
-      ws = new WebSocket('ws://127.0.0.1:8888/ws/agent-stream');
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/agent-stream`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -178,6 +181,14 @@ export default function Dashboard() {
             storeRef.current.updateNode(run_id, node_id, { status: 'success', output, metadata: metadata || {} });
           } else if (type === 'error') {
             storeRef.current.updateNode(run_id, node_id, { status: 'error', error });
+          } else if (type === 'run_complete') {
+            // Reset any nodes still stuck in "running" to idle
+            const currentNodes = useAgentStore.getState().nodesState;
+            Object.entries(currentNodes).forEach(([nid, ns]) => {
+              if (ns?.status === 'running') {
+                storeRef.current.updateNode(run_id, nid, { status: 'idle' });
+              }
+            });
           }
         } catch (e) {
           console.warn('WS parse error:', e);
@@ -231,6 +242,20 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  // Load custom agents into global store so NodeSidebar + AgentChat can use them
+  useEffect(() => {
+    const loadCustomAgents = async () => {
+      try {
+        const res = await fetch(`${API}/custom-agents`);
+        const data = await res.json();
+        useAgentStore.getState().setCustomAgents(data.agents || []);
+      } catch { }
+    };
+    loadCustomAgents();
+    const interval = setInterval(loadCustomAgents, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const down = (e) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
@@ -277,10 +302,18 @@ export default function Dashboard() {
       setQuery('');
       setIsProcessing(true);
       try {
+        // Collect per-node model overrides from canvas (set via node config panel)
+        const nodeModels = useAgentStore.getState().canvasNodeModels || {};
+
         await fetch(`${API}/run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, mode: execMode, allow_heavy: allowHeavy })
+          body: JSON.stringify({
+            prompt,
+            mode: execMode,
+            allow_heavy: allowHeavy,
+            node_models: Object.keys(nodeModels).length > 0 ? nodeModels : undefined,
+          })
         });
       } catch (err) {
         console.error("Connection error!");
@@ -441,6 +474,11 @@ export default function Dashboard() {
               </div>
             </div>
 
+            <VoiceButton
+              onTranscript={(text) => setQuery((prev) => prev ? prev + ' ' + text : text)}
+              disabled={isProcessing || isSystemActive}
+            />
+
             <div className="flex items-center gap-1 shrink-0">
               <div className="flex items-center bg-canvas/50 border border-borderDefault/50 rounded-md p-0.5">
                 {['auto', 'direct', 'agent'].map(mode => (
@@ -479,7 +517,8 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-2">
-            <ConnectionStatus health={health} />
+            <TopClock />
+            <ConnectionStatus health={health} wsStatus={wsStatus} />
 
             <motion.button
               onClick={handleClearLogs}

@@ -3,16 +3,25 @@ import json
 import asyncio
 from config import OLLAMA_URL, MODELS
 
-# ── Fallback chains: if primary model fails, try fallback ──
+# ── Fallback chains: only reference models actually pulled locally ──
+# Keep this list in sync with `ollama list`. A fallback to a missing
+# model produces a 600s timeout per retry and looks like a hang.
 FALLBACK_CHAIN = {
-    "deepseek-coder:6.7b": "llama3:8b",
-    "phi3:mini": "llama3:8b",
-    "llama3:8b": "llama3:latest",
-    "llama3:latest": "llama3:8b",
+    "qwen3.5:9b":         "llama3.1:8b",
+    "qwen2.5-coder:14b":  "qwen2.5:14b",
+    "qwen2.5:14b":        "llama3.1:8b",
+    "deepseek-r1:8b":     "llama3.1:8b",
+    "gpt-oss:20b":        "qwen2.5-coder:14b",
+    "phi4:latest":        "qwen2.5-coder:14b",
+    "gemma4:26b":         "gpt-oss:20b",
 }
 
-MAX_RETRIES = 2
-RETRY_DELAY_BASE = 1.5  # seconds, exponential backoff
+MAX_RETRIES = 1
+RETRY_DELAY_BASE = 1.0  # seconds, exponential backoff
+
+# Keep models warm across hops so agent switches don't pay a cold-load tax.
+# Overridable per-call via the keep_alive kwarg.
+DEFAULT_KEEP_ALIVE = "15m"
 
 
 async def check_ollama_health() -> dict:
@@ -30,7 +39,7 @@ async def check_ollama_health() -> dict:
         return {"status": "disconnected", "models": [], "detail": str(e)}
 
 
-async def async_generate(model: str, prompt: str) -> str:
+async def async_generate(model: str, prompt: str, keep_alive: str = DEFAULT_KEEP_ALIVE) -> str:
     """Generate with retry + fallback logic."""
     current_model = model
     last_error = None
@@ -40,7 +49,12 @@ async def async_generate(model: str, prompt: str) -> str:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     OLLAMA_URL,
-                    json={"model": current_model, "prompt": prompt, "stream": False},
+                    json={
+                        "model": current_model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "keep_alive": keep_alive,
+                    },
                     timeout=120.0
                 )
                 data = response.json()
@@ -65,7 +79,7 @@ async def async_generate(model: str, prompt: str) -> str:
     raise Exception(f"All {MAX_RETRIES + 1} attempts failed for model '{model}': {last_error}")
 
 
-async def async_generate_stream(model: str, prompt: str):
+async def async_generate_stream(model: str, prompt: str, keep_alive: str = DEFAULT_KEEP_ALIVE):
     """Streaming generate with retry + fallback logic."""
     current_model = model
     last_error = None
@@ -76,8 +90,13 @@ async def async_generate_stream(model: str, prompt: str):
                 async with client.stream(
                     "POST",
                     OLLAMA_URL,
-                    json={"model": current_model, "prompt": prompt, "stream": True},
-                    timeout=120.0
+                    json={
+                        "model": current_model,
+                        "prompt": prompt,
+                        "stream": True,
+                        "keep_alive": keep_alive,
+                    },
+                    timeout=180.0
                 ) as response:
                     if response.status_code != 200:
                         raise Exception(f"HTTP {response.status_code}")

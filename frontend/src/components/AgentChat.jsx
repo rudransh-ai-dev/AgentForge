@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, Copy, Check, Loader2, RefreshCw, AlertTriangle, ChevronDown, X, Edit3, Cpu, Settings2 } from 'lucide-react';
+import VoiceButton from './VoiceButton';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { getAgents, getAgentById, loadAgentPrompts, getAgentPrompt, API } from '../config/agents';
 import { useAgentChatHistoryStore } from '../store/useAgentChatHistoryStore';
+import { useAgentStore } from '../store/useAgentStore';
 import ChatHistoryPanel from './ChatHistoryPanel';
 
 const markdownComponents = {
@@ -67,7 +69,23 @@ const markdownComponents = {
 };
 
 export default function AgentChat() {
-  const AGENTS = getAgents();
+  const { customAgents } = useAgentStore();
+  const builtinAgents = getAgents();
+  const AGENTS = useMemo(() => [
+    ...builtinAgents,
+    ...customAgents.map(a => ({
+      id: `custom_${a.id}`,
+      label: a.name,
+      icon: Cpu,
+      color: a.color || '#58a6ff',
+      desc: a.model,
+      isCustom: true,
+      customId: a.id,
+      systemPrompt: a.system_prompt,
+      model: a.model,
+    })),
+  ], [customAgents]);
+
   const [availableModels, setAvailableModels] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(AGENTS[0]);
   const [selectedModel, setSelectedModel] = useState('');
@@ -247,13 +265,20 @@ export default function AgentChat() {
       const customPrompt = agentCustomPrompts[selectedAgent.id];
       const isCustom = customPrompt !== agentDefaultPrompts[selectedAgent.id];
 
-      const res = await fetch(`${API}/agent/${selectedAgent.id}/chat`, {
+      // Custom agents use their actual backend ID, not the frontend `custom_` prefix
+      const endpoint = selectedAgent.isCustom
+        ? `${API}/agent/custom/${selectedAgent.customId}/chat`
+        : `${API}/agent/${selectedAgent.id}/chat`;
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: msgText,
-          model: selectedModel,
-          custom_prompt: isCustom ? customPrompt : undefined,
+          model: selectedModel || selectedAgent.model,
+          custom_prompt: selectedAgent.isCustom
+            ? selectedAgent.systemPrompt
+            : (isCustom ? customPrompt : undefined),
         }),
       });
 
@@ -426,6 +451,10 @@ export default function AgentChat() {
                   placeholder={`Ask ${selectedAgent.label}...`}
                   rows={1}
                   className="flex-1 bg-transparent text-sm text-fgDefault placeholder-fgSubtle resize-none outline-none px-2 py-1.5 min-h-[36px] max-h-[160px] disabled:opacity-40"
+                />
+                <VoiceButton
+                  onTranscript={(text) => setInput((prev) => prev ? prev + ' ' + text : text)}
+                  disabled={isStreaming}
                 />
                 <button
                   onClick={() => sendMessage()}

@@ -10,7 +10,7 @@ from core.prompts import analyst_prompt
 
 async def run_analyst_async(prompt: str, model_override: str | None = None):
     """Analyze and explain using the analyst model through the VRAM scheduler."""
-    agent_cfg = MODELS.get("analyst", {"name": "llama3:8b"})
+    agent_cfg = MODELS.get("analyst", {"name": "llama3.1:8b"})
     default_model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
     model = model_override or default_model
 

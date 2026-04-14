@@ -1,23 +1,23 @@
 import React, { useState } from 'react';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import {
-  Activity, Clock, FileCode2, Cpu, FileWarning, Send, Zap,
+  Activity, Clock, FileCode2, Cpu, FileWarning, Send, Zap, Play,
   Minus, Trash2, Maximize2, Settings2, X, Check, ChevronDown
 } from 'lucide-react';
 import { useAgentStore } from '../store/useAgentStore';
 
 export default function CustomNode({ id, data }) {
   const { label, stateData: nodeStateData } = data;
-  const { nodesState } = useAgentStore();
+  const { nodesState, availableModels, setCanvasNodeModel, canvasNodeModels, resetAll } = useAgentStore();
   const [nodePrompt, setNodePrompt] = useState('');
   const [isPrompting, setIsPrompting] = useState(false);
+  const [isRunningPipeline, setIsRunningPipeline] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [configLabel, setConfigLabel] = useState(label);
   const [configSystemPrompt, setConfigSystemPrompt] = useState(data.systemPrompt || '');
   const [configModel, setConfigModel] = useState(data.model || '');
   const { deleteElements, setNodes } = useReactFlow();
-  const { availableModels } = useAgentStore();
 
   // Prefer store state over node data for live updates
   const storeState = nodesState[id];
@@ -51,11 +51,40 @@ export default function CustomNode({ id, data }) {
     }
   };
 
+  const handleRunPipeline = async () => {
+    if (nodePrompt.trim() === '' || isRunningPipeline) return;
+    setIsRunningPipeline(true);
+    resetAll();
+    try {
+      const res = await fetch("/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: nodePrompt,
+          mode: "agent",
+          node_models: canvasNodeModels || {},
+        })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        console.error("Pipeline run failed:", res.status, txt);
+      }
+    } catch (err) {
+      console.error("Pipeline run error:", err);
+    } finally {
+      setIsRunningPipeline(false);
+    }
+  };
+
   const saveConfig = () => {
     setNodes(nds => nds.map(n => n.id === id
       ? { ...n, data: { ...n.data, label: configLabel, model: configModel, systemPrompt: configSystemPrompt } }
       : n
     ));
+    // Push model override to global store → sent with next /run request
+    if (configModel) {
+      setCanvasNodeModel(id, configModel);
+    }
     setShowConfig(false);
   };
 
@@ -65,11 +94,10 @@ export default function CustomNode({ id, data }) {
       {/* Status dot */}
       {currentStatus !== 'idle' && (
         <div className="absolute -top-1.5 -right-1.5 z-10">
-          <div className={`w-3 h-3 rounded-full border-2 border-[#0d1117] ${
-            currentStatus === 'running' ? 'bg-[#58a6ff] shadow-[0_0_8px_rgba(88,166,255,0.8)] animate-pulse' :
-            currentStatus === 'success' ? 'bg-[#3fb950] shadow-[0_0_8px_rgba(63,185,80,0.8)]' :
-            'bg-[#f85149] shadow-[0_0_8px_rgba(248,81,73,0.8)]'
-          }`} />
+          <div className={`w-3 h-3 rounded-full border-2 border-[#0d1117] ${currentStatus === 'running' ? 'bg-[#58a6ff] shadow-[0_0_8px_rgba(88,166,255,0.8)] animate-pulse' :
+              currentStatus === 'success' ? 'bg-[#3fb950] shadow-[0_0_8px_rgba(63,185,80,0.8)]' :
+                'bg-[#f85149] shadow-[0_0_8px_rgba(248,81,73,0.8)]'
+            }`} />
         </div>
       )}
 
@@ -79,11 +107,10 @@ export default function CustomNode({ id, data }) {
 
       {/* Header */}
       <div className={`flex items-center gap-2 px-3 py-2 border-b ${isMinimized ? 'border-transparent' : 'border-[#21262d]'}`}>
-        <div className={`p-1 rounded shrink-0 ${
-          currentStatus === 'running' ? 'bg-[#58a6ff]/15' :
-          currentStatus === 'success' ? 'bg-[#3fb950]/15' :
-          'bg-[#21262d]'
-        }`}>
+        <div className={`p-1 rounded shrink-0 ${currentStatus === 'running' ? 'bg-[#58a6ff]/15' :
+            currentStatus === 'success' ? 'bg-[#3fb950]/15' :
+              'bg-[#21262d]'
+          }`}>
           {label.toLowerCase().includes('manager') || label.toLowerCase().includes('agent') ? (
             <Cpu className="w-3 h-3" />
           ) : label.toLowerCase().includes('coder') ? (
@@ -126,12 +153,11 @@ export default function CustomNode({ id, data }) {
         </div>
 
         {/* Status badge */}
-        <div className={`ml-1 px-1.5 py-0.5 rounded text-[8px] font-semibold tracking-wider uppercase shrink-0 ${
-          currentStatus === 'running' ? 'bg-[#58a6ff]/10 text-[#58a6ff]' :
-          currentStatus === 'success' ? 'bg-[#3fb950]/10 text-[#3fb950]' :
-          currentStatus === 'error' ? 'bg-[#f85149]/10 text-[#f85149]' :
-          'bg-[#21262d] text-[#6e7681]'
-        }`}>
+        <div className={`ml-1 px-1.5 py-0.5 rounded text-[8px] font-semibold tracking-wider uppercase shrink-0 ${currentStatus === 'running' ? 'bg-[#58a6ff]/10 text-[#58a6ff]' :
+            currentStatus === 'success' ? 'bg-[#3fb950]/10 text-[#3fb950]' :
+              currentStatus === 'error' ? 'bg-[#f85149]/10 text-[#f85149]' :
+                'bg-[#21262d] text-[#6e7681]'
+          }`}>
           {currentStatus === 'running' ? <Activity className="w-2 h-2 animate-spin" /> : currentStatus}
         </div>
       </div>
@@ -223,7 +249,7 @@ export default function CustomNode({ id, data }) {
             </div>
           )}
 
-          {/* Quick prompt input */}
+          {/* Quick prompt input (non-input nodes) */}
           {!isInputNode && (
             <div className="relative">
               <input
@@ -242,6 +268,35 @@ export default function CustomNode({ id, data }) {
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[#484f58] hover:text-[#58a6ff] transition-colors"
               >
                 <Send className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
+          {/* Pipeline trigger (input node only) */}
+          {isInputNode && (
+            <div className="space-y-1.5">
+              <textarea
+                name={`pipeline-prompt-${id}`}
+                value={nodePrompt}
+                onChange={(e) => setNodePrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleRunPipeline();
+                }}
+                disabled={isRunningPipeline}
+                rows={3}
+                placeholder="Describe the task… (Ctrl+Enter to run)"
+                className="w-full bg-[#0d1117] border border-[#21262d] rounded p-1.5 text-[10px] text-[#c9d1d9] placeholder-[#484f58] focus:outline-none focus:border-[#58a6ff]/60 disabled:opacity-40 resize-none font-mono"
+              />
+              <button
+                onClick={handleRunPipeline}
+                disabled={isRunningPipeline || !nodePrompt.trim()}
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded bg-[#238636]/20 border border-[#238636]/40 text-[#3fb950] hover:bg-[#238636]/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[10px] font-semibold uppercase tracking-wider"
+              >
+                {isRunningPipeline ? (
+                  <><Activity className="w-3 h-3 animate-spin" /> Running…</>
+                ) : (
+                  <><Play className="w-3 h-3" /> Run Pipeline</>
+                )}
               </button>
             </div>
           )}

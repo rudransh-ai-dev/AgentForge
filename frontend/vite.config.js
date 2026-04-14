@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), basicSsl()],
   server: {
     proxy: {
       '/ws': {
@@ -73,6 +74,9 @@ export default defineConfig({
         target: 'http://127.0.0.1:8888',
       },
       '/run-legacy': {
+        target: 'http://127.0.0.1:8888',
+      },
+      '/transcribe': {
         target: 'http://127.0.0.1:8888',
       },
     },

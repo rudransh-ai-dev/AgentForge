@@ -9,35 +9,42 @@ import NodeInspectorPanel from './NodeInspectorPanel';
 const nodeTypes = { custom: CustomNode };
 
 const AGENT_MODELS = {
-  manager: 'qwen2.5:14b',
-  coder: 'deepseek-coder-v2:16b',
-  analyst: 'qwen2.5:14b',
-  critic: 'devstral:24b',
-  tool: 'qwen2.5-coder:7b',
+  manager: 'llama3.1:8b',
+  writer: 'gpt-oss:20b',
+  editor: 'qwen2.5-coder:14b',
+  tester: 'deepseek-r1:8b',
+  researcher: 'qwen2.5:14b',
+  heavy: 'phi4:latest',
+  context_manager: 'llama3.1:8b',
+  tool: 'llama3.1:8b',
   executor: 'sandbox',
 };
 
 const INITIAL_NODES = [
-  { id: 'input', data: { label: 'User Input', stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 50, y: 200 } },
-  { id: 'manager', data: { label: 'Manager', model: AGENT_MODELS.manager, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 400, y: 200 } },
-  { id: 'coder', data: { label: 'Coder', model: AGENT_MODELS.coder, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 800, y: 50 } },
-  { id: 'analyst', data: { label: 'Analyst', model: AGENT_MODELS.analyst, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 800, y: 250 } },
-  { id: 'critic', data: { label: 'Critic', model: AGENT_MODELS.critic, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 800, y: 450 } },
-  { id: 'tool', data: { label: 'Tool', model: AGENT_MODELS.tool, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 1200, y: 50 } },
-  { id: 'executor', data: { label: 'Executor', model: AGENT_MODELS.executor, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 1200, y: 250 } },
+  { id: 'input', data: { label: 'User Input', stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 50, y: 300 } },
+  { id: 'manager', data: { label: 'Orchestrator', model: AGENT_MODELS.manager, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 300, y: 300 } },
+  { id: 'writer', data: { label: 'Senior Coder', model: AGENT_MODELS.writer, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 100 } },
+  { id: 'editor', data: { label: 'Code Editor', model: AGENT_MODELS.editor, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 250 } },
+  { id: 'tester', data: { label: 'QA Tester', model: AGENT_MODELS.tester, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 400 } },
+  { id: 'researcher', data: { label: 'Researcher', model: AGENT_MODELS.researcher, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 550 } },
+  { id: 'heavy', data: { label: 'System Architect', model: AGENT_MODELS.heavy, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 950, y: 600 } },
+  { id: 'tool', data: { label: 'Tool Mgr', model: AGENT_MODELS.tool, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 1000, y: 250 } },
+  { id: 'executor', data: { label: 'Executor', model: AGENT_MODELS.executor, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 1250, y: 250 } },
 ];
 
 const INITIAL_EDGES = [
   { id: 'e-in-m', source: 'input', target: 'manager' },
-  { id: 'e-m-c', source: 'manager', target: 'coder' },
-  { id: 'e-m-a', source: 'manager', target: 'analyst' },
-  { id: 'e-m-cr', source: 'manager', target: 'critic' },
-  { id: 'e-c-t', source: 'coder', target: 'tool' },
-  { id: 'e-t-x', source: 'tool', target: 'executor' },
+  { id: 'e-m-w', source: 'manager', target: 'writer' },
+  { id: 'e-m-res', source: 'manager', target: 'researcher' },
+  { id: 'e-w-e', source: 'writer', target: 'editor' },
+  { id: 'e-e-t', source: 'editor', target: 'tester' },
+  { id: 'e-t-e', source: 'tester', target: 'editor', animated: true, style: { strokeDasharray: '4,4', stroke: '#d29922' } },
+  { id: 'e-e-tool', source: 'editor', target: 'tool' },
+  { id: 'e-tool-x', source: 'tool', target: 'executor' },
 ];
 
 function CanvasInner({ isFullscreen, setIsFullscreen }) {
-  const { nodesState, selectedNodeId, activeRunId, updateNode } = useAgentStore();
+  const { nodesState, selectedNodeId, activeRunId } = useAgentStore();
   const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES);
   const [rfInstance, setRfInstance] = useState(null);
@@ -78,17 +85,17 @@ function CanvasInner({ isFullscreen, setIsFullscreen }) {
       }
       const targetAgent = e.target;
       const ns = nodesState[targetAgent];
-      if (['coder', 'analyst', 'critic'].includes(targetAgent)) {
+      if (['writer', 'editor', 'tester', 'researcher'].includes(targetAgent)) {
         const isActive = routeTarget === targetAgent || ns?.status !== 'idle';
-        const colors = { coder: ['#a371f7', '163,113,247'], analyst: ['#3fb950', '63,185,80'], critic: ['#d29922', '210,153,34'] };
+        const colors = { writer: ['#a371f7', '163,113,247'], editor: ['#db2777', '219,39,119'], tester: ['#d29922', '210,153,34'], researcher: ['#3fb950', '63,185,80'] };
         const [c, rgb] = colors[targetAgent] || ['#58a6ff', '88,166,255'];
         return { ...e, animated: ns?.status === 'running', style: isActive ? glow(c, rgb) : dim };
       }
-      if (e.id === 'e-c-t') {
+      if (e.id === 'e-e-tool') {
         const isActive = nodesState.tool?.status !== 'idle';
         return { ...e, animated: nodesState.tool?.status === 'running', style: isActive ? glow('#db61a2', '219,97,162') : dim };
       }
-      if (e.id === 'e-t-x') {
+      if (e.id === 'e-tool-x') {
         const isActive = nodesState.executor?.status !== 'idle';
         return { ...e, animated: nodesState.executor?.status === 'running', style: isActive ? glow('#58a6ff', '88,166,255') : dim };
       }
@@ -120,14 +127,13 @@ function CanvasInner({ isFullscreen, setIsFullscreen }) {
     if (!type || !rfInstance) return;
     const position = rfInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const newNode = {
-      id: `node-${Date.now()}`,
+      id: `node-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       type,
       position,
       data: { label, model: model || '', stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } },
     };
     setNodes(nds => nds.concat(newNode));
-    updateNode(activeRunId || 'none', newNode.id, { status: 'idle', input: '', output: '', error: '' });
-  }, [rfInstance, setNodes, activeRunId, updateNode]);
+  }, [rfInstance, setNodes]);
 
   // Delete selected node with Backspace/Delete
   useEffect(() => {

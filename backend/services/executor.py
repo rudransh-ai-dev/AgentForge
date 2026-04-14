@@ -132,6 +132,7 @@ class PythonRunner(Runner):
         try:
             process = await asyncio.create_subprocess_exec(
                 python_bin, entry,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=project_dir,

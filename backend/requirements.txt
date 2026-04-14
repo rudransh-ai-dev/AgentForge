@@ -6,3 +6,7 @@ httpx
 python-multipart
 mcp
 websockets
+python-dotenv
+google-generativeai
+openai
+faster-whisper

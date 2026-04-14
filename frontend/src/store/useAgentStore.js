@@ -2,9 +2,12 @@ import { create } from 'zustand';
 
 const INITIAL_NODES_STATE = {
   manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-  coder: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-  analyst: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
-  critic: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  writer: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  editor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  tester: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  researcher: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  heavy: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  context_manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
   tool: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
   executor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
 };
@@ -16,8 +19,14 @@ export const useAgentStore = create((set) => ({
   selectedNodeId: null,
   availableModels: [],
   configuredModels: {},
+  customAgents: [],
+  canvasNodeModels: {}, // { manager: "llama3.1:8b", coder: "qwen2.5-coder:14b", ... }
   setAvailableModels: (models) => set({ availableModels: models }),
   setConfiguredModels: (models) => set({ configuredModels: models }),
+  setCustomAgents: (agents) => set({ customAgents: agents }),
+  setCanvasNodeModel: (nodeId, model) => set((state) => ({
+    canvasNodeModels: { ...state.canvasNodeModels, [nodeId]: model }
+  })),
 
   // Workspace
   projects: [],

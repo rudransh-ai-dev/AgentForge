@@ -1,12 +1,48 @@
+# ═══════════════════════════════════════
+# AI Agent IDE — .gitignore
+# ═══════════════════════════════════════
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node
 node_modules/
 dist/
 build/
-.env
-.DS_Store
-__pycache__/
-*.pyc
-.venv/
-venv/
-backend/workspace/*/
 frontend/node_modules/
+
+# Environment & Secrets
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
 .vscode/
+.idea/
+
+# Runtime artifacts
+*.log
+backend/memory.db
+backend/memory.db-shm
+backend/memory.db-wal
+backend/diffs/
+
+# Generated workspace projects (user output, not source)
+backend/workspace/*/
+workspace/
+workspace/*/.venv/
+workspace/*/node_modules/
+
+# Removed cloud integrations (should not come back)
+backend/services/openai_client.py
+backend/services/gemini_client.py
+backend/services/gemini_fallback.py
+backend/services/mcp_client.py
+mcp.json

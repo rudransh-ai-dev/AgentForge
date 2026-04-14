@@ -2,11 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Activity, ChevronDown, ChevronRight, Clock, CheckCircle, XCircle, Zap, RefreshCw, Trash2 } from 'lucide-react';
 import { useAgentStore } from '../store/useAgentStore';
 
-const API = "http://127.0.0.1:8888";
+const API = "";
 
 const nodeColors = {
-  manager: '#58a6ff',
-  coder: '#a371f7',
+  manager: '#06b6d4',
+  writer: '#a855f7',
+  editor: '#db2777',
+  tester: '#f59e0b',
+  researcher: '#22c55e',
+  heavy: '#6366f1',
+  context_manager: '#14b8a6',
+  coder: '#a855f7',
   analyst: '#3fb950',
   critic: '#d29922',
   tool: '#db61a2',
@@ -96,7 +102,7 @@ export default function TimelinePanel({ executionLog }) {
         {activeRunId && liveLog.length > 0 ? (
           [...liveLog].reverse().slice(0, 60).map((log, i) => (
             <div
-              key={log.event_id || i}
+              key={`${log.event_id || ''}-${log.timestamp || ''}-${i}`}
               className="rounded-md border border-[#21262d] bg-[#0d1117]/60 hover:border-[#30363d] transition-all overflow-hidden"
             >
               {/* Event header */}

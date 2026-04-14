@@ -33,6 +33,10 @@ from agents.analyst import run_analyst_async
 from agents.critic import run_critic_async
 from agents.tool import run_tool_agent_async, execute_project_async, autofix_loop_async
 from agents.reader import run_reader_async
+from agents.writer import run_writer_async
+from agents.editor import run_editor_async
+from agents.tester import run_tester_async
+from agents.researcher import run_researcher_async
 from services.event_emitter import emitter
 from core.memory import store_run, update_pattern, get_run_history, get_stats
 from core.memory_manager import get_db_health, cleanup_old_data
@@ -65,6 +69,7 @@ from core.session import (
 )
 from config import MODELS
 from services.ollama_client import async_generate_stream, check_ollama_health
+from services.whisper_stt import transcribe_audio, is_whisper_available
 from services.vram_scheduler import (
     sync_model_registry,
     get_scheduler_status,
@@ -80,14 +85,23 @@ from core.prompts import (
     analyst_chat_prompt,
     critic_chat_prompt,
     reader_chat_prompt,
+    researcher_chat_prompt,
     qa_chat_prompt,
     manager_prompt,
     coder_prompt,
     analyst_prompt,
     critic_prompt,
+    researcher_prompt,
 )
 
-WORKSPACE_DIR = os.path.join(os.path.dirname(__file__), "workspace")
+# Use the project-root /workspace directory — the SAME path
+# backend/agents/tool.py writes to. Previously pointed at
+# backend/workspace, which meant the /workspace API listed an empty
+# directory while the agents silently saved files one level up.
+WORKSPACE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "workspace",
+)
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 # Global execution tracking for stop/cancel
@@ -122,15 +136,33 @@ def root():
 async def startup_sync_registry():
     """Seed DB schemas and sync model registry from Ollama on server boot."""
     from core.memory_manager import init_all
-    from services.mcp_client import mcp_manager
     init_all()
     await sync_model_registry()
-    await mcp_manager.initialize_all()
+
+    # Warm the manager/router model so the first canvas click doesn't
+    # pay a 30-60s cold load. Failures here are non-fatal.
+    try:
+        mgr_cfg = MODELS.get("manager", {"name": "llama3.1:8b"})
+        mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
+        print(f"🔥 Warming manager model: {mgr_model}")
+        async with __import__("httpx").AsyncClient(timeout=120.0) as client:
+            await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": mgr_model,
+                    "prompt": "ok",
+                    "stream": False,
+                    "keep_alive": "30m",
+                    "options": {"num_predict": 1},
+                },
+            )
+        print(f"✅ Manager model warm: {mgr_model}")
+    except Exception as e:
+        print(f"⚠️  Manager warmup skipped: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    from services.mcp_client import mcp_manager
-    await mcp_manager.close()
+    pass
 
 
 # ══════════════════════════════════════════════════════════════
@@ -151,6 +183,7 @@ async def health():
         "models": ollama_status.get("models", []),
         "configured": configured_flat,
         "scheduler": get_scheduler_status(),
+        "voice": is_whisper_available(),
     }
 
 
@@ -186,6 +219,10 @@ async def get_prompts():
         "critic": {
             "pipeline": critic_prompt(),
             "chat": critic_chat_prompt(),
+        },
+        "researcher": {
+            "pipeline": researcher_prompt(),
+            "chat": researcher_chat_prompt(),
         },
     }
 
@@ -229,6 +266,9 @@ class RunRequest(BaseModel):
     session_id: Optional[str] = None
     model: Optional[str] = None
     allow_heavy: bool = False
+    research_mode: bool = False
+    # Canvas node model overrides: {"coder": "qwen2.5-coder:14b", "critic": "phi3:mini", ...}
+    node_models: Optional[dict] = None
 
 
 class ChatMessage(BaseModel):
@@ -257,24 +297,27 @@ async def run(body: RunRequest):
 
         # AUTO mode: let the router decide
         if mode == "auto":
-            is_complex = any(
-                kw in body.prompt.lower()
-                for kw in [
-                    "build",
-                    "create",
-                    "project",
-                    "implement",
-                    "system",
-                    "multi",
-                    "full",
-                    "complete",
-                    "app",
-                    "application",
-                    "write a",
-                    "develop",
-                    "architect",
-                ]
-            )
+            p = body.prompt.lower()
+            is_complex = any(kw in p for kw in [
+                # build tasks
+                "build", "create", "project", "implement", "develop", "architect",
+                "design", "make a", "make me", "generate a", "generate me",
+                # write/code tasks — anything that should produce a file
+                "write a", "write me", "write the", "write an",
+                "code a", "code me", "code the",
+                "script", "program", "function", "class", "module",
+                "app", "application", "system", "multi", "full", "complete",
+                # language-specific triggers
+                "in python", "in javascript", "in typescript", "in java",
+                "in go", "in rust", "in c++", "in bash", "in html",
+                "python script", "js script", "shell script",
+                # hello world and similar entry-level code tasks
+                "hello world", "helloworld", "factorial", "fibonacci",
+                "sort algorithm", "binary search", "linked list",
+                # fix/debug tasks that should go through critic
+                "fix this", "debug this", "refactor", "optimize this",
+                "add tests", "unit test", "write test",
+            ])
             mode = "agent" if is_complex else "direct"
 
         if mode == "direct":
@@ -288,6 +331,8 @@ async def run(body: RunRequest):
                 body.prompt,
                 session_id=session_id,
                 allow_heavy=body.allow_heavy,
+                research_mode=body.research_mode,
+                node_models=body.node_models or {},
             )
 
         return {
@@ -310,6 +355,35 @@ async def run_legacy(query: Query):
 # ══════════════════════════════════════════════════════════════
 
 
+def _resolve_node_handler(agent_id: str, prompt: str, model: Optional[str]):
+    """
+    Map a canvas node id to a streaming agent coroutine.
+    Falls back to the analyst for unknown / custom ids.
+    """
+    a = (agent_id or "").lower()
+
+    # Coding pipeline agents
+    if a in ("writer", "coder"):
+        return run_writer_async(prompt, model_override=model) if a == "writer" \
+            else run_coder_async(prompt, model_override=model)
+    if a == "editor":
+        return run_editor_async(prompt, draft_output="", model_override=model)
+    if a in ("tester", "critic"):
+        return run_tester_async(prompt, model_override=model) if a == "tester" \
+            else run_critic_async(prompt, model_override=model)
+
+    # Reasoning / routing agents — all use analyst-style streaming
+    if a in ("manager", "analyst", "context_manager", "reader", "heavy"):
+        return run_analyst_async(prompt, model_override=model)
+
+    # Cloud research
+    if a == "researcher":
+        return run_researcher_async(prompt, model_override=model or "gemini-2.5-flash")
+
+    # Unknown / custom — safe default
+    return run_analyst_async(prompt, model_override=model)
+
+
 @app.post("/run-node")
 async def run_node(query: NodeQuery):
     run_id = str(uuid.uuid4())
@@ -322,19 +396,31 @@ async def run_node(query: NodeQuery):
     agent_start = time.time()
     result = ""
 
+    # Special handling for non-LLM nodes
+    if agent_id in ("tool", "executor", "input"):
+        try:
+            if agent_id == "tool":
+                tr = await run_tool_agent_async(run_id, query.prompt)
+                result = json.dumps(tr)[:2000]
+            elif agent_id == "executor":
+                result = "Executor node: wire me to a project via the pipeline Run button."
+            else:
+                result = "Input node: type your prompt here and click Run Pipeline."
+            await emitter.emit(
+                run_id, agent_id, "complete",
+                output_str=result,
+                metadata={"latency_ms": int((time.time() - agent_start) * 1000), "direct_prompt": True},
+            )
+            return {"result": result, "run_id": run_id}
+        except Exception as e:
+            await emitter.emit(run_id, agent_id, "error", error=str(e))
+            return {"error": str(e)}
+
     try:
-        if agent_id == "coder":
-            async for chunk in run_coder_async(query.prompt):
-                result += chunk
-                await emitter.emit(run_id, agent_id, "update", output_str=result)
-        elif agent_id == "critic":
-            async for chunk in run_critic_async(query.prompt):
-                result += chunk
-                await emitter.emit(run_id, agent_id, "update", output_str=result)
-        else:
-            async for chunk in run_analyst_async(query.prompt):
-                result += chunk
-                await emitter.emit(run_id, agent_id, "update", output_str=result)
+        gen = _resolve_node_handler(agent_id, query.prompt, query.model)
+        async for chunk in gen:
+            result += chunk
+            await emitter.emit(run_id, agent_id, "update", output_str=result)
 
         agent_latency = int((time.time() - agent_start) * 1000)
         await emitter.emit(
@@ -349,7 +435,7 @@ async def run_node(query: NodeQuery):
             },
         )
 
-        if agent_id == "coder" and ("```" in result or "def " in result):
+        if agent_id in ("coder", "writer") and ("```" in result or "def " in result):
             await run_tool_agent_async(run_id, result)
 
         return {"result": result, "run_id": run_id}
@@ -804,29 +890,7 @@ def list_chat_sessions_endpoint(limit: int = 20):
     return {"sessions": list_chat_sessions(limit)}
 
 
-# ══════════════════════════════════════════════════════════════
-# MCP API
-# ══════════════════════════════════════════════════════════════
 
-
-@app.get("/mcp/tools")
-async def list_mcp_tools():
-    """List all tools available across configured MCP servers."""
-    from services.mcp_client import mcp_manager
-    tools = await mcp_manager.get_all_tools()
-    return {"tools": tools}
-
-
-@app.post("/mcp/call/{server_name}/{tool_name}")
-async def call_mcp_tool(server_name: str, tool_name: str, body: dict):
-    """Call a specific MCP tool."""
-    from services.mcp_client import mcp_manager
-    try:
-        result = await mcp_manager.call_tool(server_name, tool_name, body)
-        # Assuming the result is serializable, otherwise just return string
-        return {"status": "success", "result": str(result)}
-    except Exception as e:
-        return {"error": str(e)}
 
 @app.get("/chat/sessions/{session_id}")
 def get_chat_session_endpoint(session_id: str):
@@ -953,18 +1017,29 @@ async def agent_chat(agent_id: str, body: ChatMessage):
         "analyst": ("analyst", analyst_chat_prompt()),
         "critic": ("critic", critic_chat_prompt()),
         "reader": ("reader", reader_chat_prompt()),
+        "researcher": ("researcher", researcher_chat_prompt()),
         "qa": ("qa", qa_chat_prompt()),
     }
 
-    if agent_id not in chat_prompts:
-        return {"error": f"Unknown agent: {agent_id}"}
+    system_instruction = body.custom_prompt or ""
+    model = body.model or "llama3.1:8b"
 
-    model_key, system_instruction = chat_prompts[agent_id]
-    model_cfg = MODELS.get(model_key, "llama3:8b")
-    model = body.model or (
-        model_cfg["name"] if isinstance(model_cfg, dict) else model_cfg
-    )
-    full_prompt = f"{system_instruction}\n\nUser: {body.message}"
+    if agent_id in chat_prompts:
+        model_key, default_system = chat_prompts[agent_id]
+        model_cfg = MODELS.get(model_key, "llama3.1:8b")
+        model = body.model or (model_cfg["name"] if isinstance(model_cfg, dict) else model_cfg)
+        system_instruction = body.custom_prompt or default_system
+    else:
+        # Check custom agents
+        custom_agents = load_custom_agents()
+        custom = next((a for a in custom_agents if a["id"] == agent_id), None)
+        if custom:
+            model = body.model or custom.get("model", "llama3.1:8b")
+            system_instruction = body.custom_prompt or custom.get("system_prompt", "")
+        else:
+            return {"error": f"Unknown agent: {agent_id}"}
+
+    full_prompt = f"{system_instruction}\n\nUser: {body.message}" if system_instruction else body.message
 
     async def stream_gen():
         full_response = ""
@@ -978,6 +1053,51 @@ async def agent_chat(agent_id: str, body: ChatMessage):
             add_message(body.session_id, role="assistant", content=full_response, agent_id=agent_id, model=model)
 
     return StreamingResponse(stream_gen(), media_type="text/event-stream")
+
+
+@app.post("/agent/custom/{agent_id}/chat")
+async def custom_agent_chat(agent_id: str, body: ChatMessage):
+    """Streaming chat with a user-defined custom agent."""
+    custom_agents = load_custom_agents()
+    agent = next((a for a in custom_agents if a["id"] == agent_id), None)
+    if not agent:
+        return {"error": f"Custom agent not found: {agent_id}"}
+
+    model = body.model or agent.get("model", "llama3.1:8b")
+    system_instruction = body.custom_prompt or agent.get("system_prompt", "")
+    full_prompt = f"{system_instruction}\n\nUser: {body.message}" if system_instruction else body.message
+
+    async def stream_gen():
+        full_response = ""
+        async for chunk in scheduled_generate(model, full_prompt):
+            full_response += chunk
+            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+        if body.session_id:
+            add_message(body.session_id, role="user", content=body.message, agent_id=agent_id, model=model)
+            add_message(body.session_id, role="assistant", content=full_response, agent_id=agent_id, model=model)
+
+    return StreamingResponse(stream_gen(), media_type="text/event-stream")
+
+
+# ══════════════════════════════════════════════════════════════
+# VOICE / SPEECH-TO-TEXT
+# ══════════════════════════════════════════════════════════════
+
+
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    """
+    Transcribe audio to text using local Whisper model.
+    Accepts any audio format from browser MediaRecorder (webm, wav, ogg).
+    """
+    audio_bytes = await file.read()
+    try:
+        text = await transcribe_audio(audio_bytes, content_type=file.content_type or "audio/webm")
+        return {"text": text, "model": "whisper-tiny"}
+    except RuntimeError as e:
+        return {"text": "", "error": str(e)}
 
 
 # ══════════════════════════════════════════════════════════════

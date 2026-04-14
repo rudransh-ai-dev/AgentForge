@@ -46,21 +46,72 @@ def should_use_heavy(task_type: str, retries: int, confidence: float) -> bool:
     return retries >= 2 or confidence < 0.5 or task_type == "debug_complex"
 
 
-def resolve_agent(task_type: str, confidence: float, retries: int = 0) -> str:
+def resolve_agent(task_type: str, confidence: float, retries: int = 0, research_mode: bool = False) -> str:
+    if research_mode or task_type == "research":
+        return "researcher"
+    
     base_agent = TASK_ROUTER.get(task_type, "analyst")
     if should_use_heavy(task_type, retries, confidence):
         return "heavy"
     return base_agent
 
 
-async def plan_task_async(prompt: str) -> dict:
+CODE_TRIGGERS = [
+    "hello world", "helloworld", "write", "code", "build", "create", "make",
+    "implement", "script", "program", "function", "class", "app", "application",
+    "generate", "develop", "factorial", "fibonacci", "sort", "search",
+    "in python", "in javascript", "in typescript", "in java", "in go",
+    "in rust", "in c++", "in bash", "in html", "python script", "js script",
+    "shell script", "calculator", "todo", "fix", "debug", "refactor",
+    "optimize", "add test", "unit test",
+]
+
+
+COMPLEXITY_TRIGGERS = [
+    "fullstack", "full-stack", "dynamic", "large", "complex", "architecture",
+    "scalable", "microservice", "infrastructure", "backend and frontend", "web app",
+    "visualizer", "dashboard", "engine", "platform", "system"
+]
+
+def _is_code_task(prompt: str) -> bool:
+    p = prompt.lower().strip()
+    if any(kw in p for kw in COMPLEXITY_TRIGGERS) or len(p) > 150:
+        return False
+    return any(kw in p for kw in CODE_TRIGGERS)
+
+
+def _deterministic_code_plan(prompt: str) -> dict:
+    """Hard-coded plan for trivial code tasks — skip LLM planning entirely."""
+    slug = re.sub(r"[^a-z0-9]+", "_", prompt.lower())[:30].strip("_") or "project"
+    return {
+        "goal": prompt[:80],
+        "project_id": slug,
+        "complexity": "simple",
+        "task_type": "code_generation",
+        "confidence": 0.95,
+        "steps": [
+            {"step": 1, "action": "code", "description": prompt[:100], "agent": "coder"},
+            {"step": 2, "action": "save_files", "description": "save to workspace", "agent": "tool"},
+            {"step": 3, "action": "execute", "description": "run and test", "agent": "executor"},
+        ],
+    }
+
+
+async def plan_task_async(prompt: str, manager_model: str | None = None) -> dict:
     """
     Planning Agent: Generates a multi-step execution plan and assigns task properties.
     """
+    # Deterministic fast-path: obvious code tasks skip the LLM planner
+    # (the LLM frequently misclassifies "hello world" as a greeting)
+    if _is_code_task(prompt):
+        return _deterministic_code_plan(prompt)
+
     plan_prompt = planner_prompt().format(prompt=prompt)
-    # Extract manager model name
-    mgr_cfg = MODELS.get("manager", {"name": "phi3:mini"})
-    mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
+    if manager_model:
+        mgr_model = manager_model
+    else:
+        mgr_cfg = MODELS.get("manager", {"name": "llama3.1:8b"})
+        mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
 
     response_text = await async_generate(mgr_model, plan_prompt)
 
@@ -154,18 +205,22 @@ async def plan_task_async(prompt: str) -> dict:
         }
 
 
-async def route_task_async(prompt: str) -> dict:
+async def route_task_async(
+    prompt: str,
+    research_mode: bool = False,
+    manager_model: str | None = None,
+) -> dict:
     """
     Enhanced Router: Now includes planning context.
     Returns routing decision + execution plan for complex tasks.
     """
     # First, generate a plan
-    plan = await plan_task_async(prompt)
+    plan = await plan_task_async(prompt, manager_model=manager_model)
 
     # The first agent in the plan tells us what the primary task is, but we use strict mapping logic
     task_type = plan.get("task_type", "analysis")
     confidence = plan.get("confidence", 0.9)
-    agent = resolve_agent(task_type, confidence)
+    agent = resolve_agent(task_type, confidence, research_mode=research_mode)
 
     decision = RouteDecision(
         selected_agent=agent,

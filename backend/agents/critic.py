@@ -10,7 +10,7 @@ from core.prompts import critic_prompt, critic_validation_prompt
 
 async def run_critic_async(prompt: str, model_override: str | None = None):
     """Review and validate output using the critic model through the VRAM scheduler."""
-    agent_cfg = MODELS.get("critic", {"name": "llama3:8b"})
+    agent_cfg = MODELS.get("critic", {"name": "deepseek-r1:8b"})
     default_model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
     model = model_override or default_model
 
@@ -26,7 +26,7 @@ async def validate_output(
     Critic validation — returns structured quality assessment.
     Used by the orchestrator's feedback loop.
     """
-    agent_cfg = MODELS.get("critic", {"name": "llama3:8b"})
+    agent_cfg = MODELS.get("critic", {"name": "deepseek-r1:8b"})
     default_model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
     model = model_override or default_model
 

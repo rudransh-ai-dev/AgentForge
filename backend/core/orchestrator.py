@@ -1,3 +1,4 @@
+import sys
 """
 Pipeline Orchestrator — The Brain of the System (v3.1)
 ======================================================
@@ -26,11 +27,18 @@ import time
 import uuid
 from typing import Optional
 
+
+
 from core.router import route_task_async
 from agents.coder import run_coder_async
 from agents.analyst import run_analyst_async
 from agents.critic import run_critic_async, validate_output
 from agents.tool import run_tool_agent_async, execute_project_async, autofix_loop_async
+from agents.researcher import run_researcher_async
+from agents.writer import run_writer_async
+from agents.editor import run_editor_async
+from agents.tester import run_tester_async, validate_code
+from core.router import COMPLEXITY_TRIGGERS
 from services.event_emitter import emitter
 from services.logger import log_pipeline_start, log_pipeline_end, log_agent_execution
 from core.memory import store_run, update_pattern
@@ -49,7 +57,7 @@ from schemas.task import Task, TaskStep, TaskBudget, ExecutionResult
 from config import MODELS
 from services.vram_scheduler import get_model_info, MODEL_REGISTRY
 
-WORKSPACE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "workspace")
+WORKSPACE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "workspace")
 
 # ── Global Pipeline Lock ──
 # Only one pipeline execution at a time (FIFO queue)
@@ -63,13 +71,18 @@ LATENCY_BUDGETS = {
     "reload": 6000,  # 6 seconds for model reload
 }
 
-# Model downgrade fallbacks for budget enforcement
+# Model downgrade fallbacks for budget enforcement.
+# Every entry here MUST reference a model actually pulled on this box —
+# see `ollama list`. A downgrade to a missing model produces a 600s
+# timeout per retry and looks like the whole pipeline hanging.
 MODEL_DOWNGRADES = {
-    "devstral:24b": "qwen2.5:14b",
-    "qwen2.5-coder:32b": "devstral:24b",
-    "qwen2.5:14b": "llama3:8b",
-    "deepseek-coder-v2:16b": "qwen2.5-coder:7b",
-    "llama3:8b": "phi3:mini",
+    "gpt-oss:20b":        "qwen2.5-coder:14b",
+    "qwen2.5-coder:14b":  "qwen2.5:14b",
+    "qwen2.5:14b":        "llama3.1:8b",
+    "llama3.1:8b":        "deepseek-r1:8b",
+    "deepseek-r1:8b":     "llama3.1:8b",
+    "phi4:latest":        "qwen2.5-coder:14b",
+    "gemma4:26b":         "gpt-oss:20b",
 }
 
 
@@ -92,14 +105,14 @@ def _get_agent_model(
     """
     Get the appropriate model for an agent, respecting budget constraints.
     """
-    agent_cfg = MODELS.get(agent, {"name": "llama3:8b"})
+    agent_cfg = MODELS.get(agent, {"name": "llama3.1:8b"})
     model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
 
     if not allow_heavy:
         info = get_model_info(model)
         if info.get("is_heavy", False):
             # Force downgrade for non-heavy-allowed tasks
-            model = MODEL_DOWNGRADES.get(model, "llama3:8b")
+            model = MODEL_DOWNGRADES.get(model, "llama3.1:8b")
 
     # Check latency budget
     downgrade = _should_downgrade(model, budget_ms)
@@ -231,9 +244,29 @@ async def run_direct_mode(
         )
 
     except Exception as e:
-        await emitter.emit(run_id, agent, "error", error=str(e))
-        log_agent_execution(run_id, agent, model, "direct_error", error=str(e))
-        result = f"Error: {e}"
+        local_error = str(e)
+        log_agent_execution(run_id, agent, model, "direct_error", error=local_error)
+
+        # For all agents — fall back to a light local model, never cloud
+        LOCAL_FALLBACK = "deepseek-r1:8b"
+        await emitter.emit(run_id, agent, "update",
+            output_str=f"⚡ {model} unavailable — falling back to {LOCAL_FALLBACK}...")
+        result = ""
+        fallback_start = time.time()
+        try:
+            gen = (run_coder_async(context_prompt, model_override=LOCAL_FALLBACK)
+                   if agent == "coder"
+                   else run_analyst_async(context_prompt, model_override=LOCAL_FALLBACK))
+            async for chunk in gen:
+                result += chunk
+                if len(result) % 80 == 0:
+                    await emitter.emit(run_id, agent, "update", output_str=result)
+            fallback_latency = int((time.time() - fallback_start) * 1000)
+            await emitter.emit(run_id, agent, "complete", output_str=result,
+                metadata={"latency_ms": fallback_latency, "model": LOCAL_FALLBACK, "mode": "local_fallback"})
+        except Exception as fe:
+            await emitter.emit(run_id, agent, "error", error=f"All local models failed: {fe}")
+            result = f"Error: {local_error}"
 
     # Update session
     if session_id:
@@ -251,6 +284,13 @@ async def run_direct_mode(
     record_run(run_id, "direct", "direct", model, total_latency, len(result), "success", session_id or "")
     log_pipeline_end(run_id, "success", total_latency)
 
+    # Release model from VRAM after direct mode — don't keep it warm
+    try:
+        from services.vram_scheduler import release_model
+        await release_model(model)
+    except Exception:
+        pass
+
     return ExecutionResult(
         task_id=run_id,
         run_id=run_id,
@@ -262,8 +302,136 @@ async def run_direct_mode(
     )
 
 
+
+async def run_production_pipeline_async(prompt: str, run_id: str, project_id: str, emitter, allow_heavy: bool = False):
+    import time
+    from services.vram_scheduler import release_model
+
+    # Resolve model names dynamically from config so the messages and
+    # VRAM releases match what's actually loaded.
+    def _model_name(agent: str, fallback: str) -> str:
+        cfg = MODELS.get(agent, {"name": fallback})
+        return cfg["name"] if isinstance(cfg, dict) else cfg
+
+    writer_model = _model_name("writer", "gpt-oss:20b")
+    editor_model = _model_name("editor", "qwen2.5-coder:14b")
+
+    # -- STAGE 1: WRITER --
+    await emitter.emit(run_id, "writer", "start", input_str=f"Stage 1/3: Writer ({writer_model}) drafting architecture and code...")
+    stage_start = time.time()
+    draft_output = ""
+    try:
+        async for chunk in run_writer_async(prompt):
+            draft_output += chunk
+            if len(draft_output) % 50 == 0:
+                await emitter.emit(run_id, "writer", "update", output_str=draft_output)
+
+        await emitter.emit(run_id, "writer", "complete", output_str=draft_output[:2000] + "\n...[truncated]...", metadata={"latency_ms": int((time.time() - stage_start) * 1000)})
+        # Unload writer immediately — use the actual writer model name,
+        # not a hardcoded string. Before this fix, the release was firing
+        # against qwen2.5-coder:14b (the editor), which evicted the wrong
+        # model and forced a reload next stage.
+        await release_model(writer_model)
+    except Exception as e:
+        await emitter.emit(run_id, "writer", "error", error=str(e))
+        return None  # Fallback gracefully if Writer dies entirely
+
+    # -- STAGE 2 & 3: EDITOR -> TESTER FEEDBACK LOOP --
+    max_retries = 3
+    refined_output = draft_output
+    tester_feedback = ""
+    
+    for attempt in range(max_retries + 1):
+        # EDITOR PHASE
+        editor_title = "Stage 2/3: Editor refining code..." if attempt == 0 else f"Stage 2/3: Editor applying fixes (Attempt {attempt})..."
+        await emitter.emit(run_id, "editor", "start", input_str=editor_title)
+        stage_start = time.time()
+        temp_refined = ""
+        try:
+            async for chunk in run_editor_async(prompt, draft_output, fix_instructions=tester_feedback):
+                temp_refined += chunk
+                if len(temp_refined) % 50 == 0:
+                    await emitter.emit(run_id, "editor", "update", output_str=temp_refined)
+            
+            refined_output = temp_refined
+            await emitter.emit(run_id, "editor", "complete", output_str=refined_output[:2000] + "\n...[truncated]...", metadata={"latency_ms": int((time.time() - stage_start) * 1000)})
+            # Unload editor using the resolved name, not a hardcoded tag.
+            await release_model(editor_model)
+        except Exception as e:
+            await emitter.emit(run_id, "editor", "error", error=str(e))
+            # Just use writer's output or previous refined output if editor dies
+            pass
+
+        # TESTER PHASE
+        await emitter.emit(run_id, "tester", "start", input_str="Stage 3/3: Tester running adversarial QA...")
+        stage_start = time.time()
+        try:
+            # We concurrently stream visual output while calculating structured JSON verdict
+            # Note: For strict correctness without complex async, we just get verdict directly
+            verdict = await validate_code(prompt, refined_output)
+            
+            summary = verdict.get("summary", "")
+            bugs = verdict.get("bugs", [])
+            state = verdict.get("verdict", "PASS")
+            score = verdict.get("score", 0)
+            
+            output_msg = f"**Verdict:** {state} (Score: {score}/10)\n**Summary:** {summary}\n"
+            if bugs:
+                output_msg += "**Found Bugs:**\n"
+                for b in bugs:
+                    output_msg += f"- {b}\n"
+            
+            await emitter.emit(run_id, "tester", "update", output_str=output_msg)
+            await emitter.emit(run_id, "tester", "complete", output_str=output_msg, metadata={"latency_ms": int((time.time() - stage_start) * 1000), "score": score, "verdict": state})
+            
+            if state == "PASS":
+                break
+            else:
+                tester_feedback = verdict.get("fix_instructions", "")
+                if not tester_feedback:
+                    tester_feedback = "\n".join(bugs)
+                    
+        except Exception as e:
+            await emitter.emit(run_id, "tester", "error", error=str(e))
+            break # Can't loop without a tester
+            
+    # Auto-Tool Saving
+    await emitter.emit(run_id, "tool", "start", input_str="Saving generated workspace files...")
+    tool_resp = await run_tool_agent_async(run_id, refined_output, project_id=project_id)
+    if tool_resp and tool_resp.get("status") == "success":
+        await emitter.emit(run_id, "tool", "complete", output_str=f"Saved {len(tool_resp.get('files', []))} files.")
+    else:
+        await emitter.emit(run_id, "tool", "error", error="Failed to save files.")
+        
+    # Generate README
+    await _generate_readme_async(run_id, project_id, prompt, refined_output)
+
+    # Save Canvas History explicitly to the workspace
+    history_md = f"# Canvas Execution History\\n\\n## Goal\\n{prompt}\\n\\n## Stage 1: Writer Draft\\n{draft_output}\\n\\n## Stage 2: Editor Output\\n{refined_output}\\n\\n## Stage 3: QA Feedback\\n{tester_feedback}"
+    import os
+    workspace_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "workspace")
+    project_dir = os.path.join(workspace_dir, project_id)
+    if os.path.exists(project_dir):
+        with open(os.path.join(project_dir, "canvas_history.md"), "w") as f:
+            f.write(history_md)
+        # Update project.json
+        meta_path = os.path.join(project_dir, "project.json")
+        if os.path.exists(meta_path):
+            import json
+            try:
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                if "canvas_history.md" not in meta.get("files", []):
+                    meta.setdefault("files", []).append("canvas_history.md")
+                    with open(meta_path, "w") as f:
+                        json.dump(meta, f, indent=2)
+            except Exception: pass
+    
+    return refined_output
+
 # ══════════════════════════════════════════════════════════════
 # AGENT MODE — Full orchestration pipeline
+
 # ══════════════════════════════════════════════════════════════
 
 
@@ -271,6 +439,8 @@ async def run_agent_mode(
     prompt: str,
     session_id: Optional[str] = None,
     allow_heavy: bool = False,
+    research_mode: bool = False,
+    node_models: dict = None,
 ) -> ExecutionResult:
     """
     Agent Mode execution — full pipeline.
@@ -298,7 +468,12 @@ async def run_agent_mode(
     await emitter.emit(run_id, "manager", "start", input_str=prompt)
 
     try:
-        decision = await route_task_async(prompt)
+        manager_override = (node_models or {}).get("manager")
+        decision = await route_task_async(
+            prompt,
+            research_mode=research_mode,
+            manager_model=manager_override,
+        )
     except Exception as e:
         await emitter.emit(run_id, "manager", "error", error=str(e))
         log_pipeline_end(run_id, "error", int((time.time() - start_time) * 1000))
@@ -376,17 +551,63 @@ async def run_agent_mode(
     execution_result = None
     feedback = None
 
+    is_complex_code_req = any(trig in prompt.lower() for trig in COMPLEXITY_TRIGGERS)
+
+    if route == "writer" or route == "coder" or (route == "coder" and is_complex_code_req):
+        final_result = await run_production_pipeline_async(prompt, run_id, project_id, emitter, allow_heavy)
+        
+        total_latency = int((time.time() - start_time) * 1000)
+        
+        # Record pipeline metrics before early return
+        from services.metrics import record_run
+        record_run(run_id, "agent", route, 
+            MODELS.get(route, {}).get("name", route) if isinstance(MODELS.get(route), dict) else MODELS.get(route, route),
+            total_latency, len(final_result) if final_result else 0, 
+            "success" if final_result else "error", session_id or "")
+
+        if final_result:
+            update_run(run_id, status="success", total_latency_ms=total_latency)
+            log_pipeline_end(run_id, "success", total_latency, 3) # approx 3 steps
+            return ExecutionResult(task_id=run_id, run_id=run_id, mode="agent", route=route, result=final_result[:3000], total_latency_ms=total_latency, status="success")
+        else:
+            update_run(run_id, status="error", total_latency_ms=total_latency)
+            log_pipeline_end(run_id, "error", total_latency, 1)
+            return ExecutionResult(task_id=run_id, run_id=run_id, mode="agent", route=route, result="Error: Pipeline execution failed.", total_latency_ms=total_latency, status="error")
+
+
     for i, step in enumerate(task.steps):
         step_agent = step.agent
         step.status = "running"
 
         # Skip non-primary agents in this simplified loop
-        if step_agent not in ["coder", "analyst", "critic"]:
+        if step_agent not in ["coder", "analyst", "critic", "researcher", "tool"]:
             continue
 
-        # Get model name from the rich config
+        if step_agent == "tool":
+            await emitter.emit(run_id, step_agent, "start", input_str=f"Step {step.step}: {step.description}")
+            step_start = time.time()
+            tr = await run_tool_agent_async(run_id, final_result, project_id=project_id)
+            step_latency = int((time.time() - step_start) * 1000)
+            
+            if tr.get("status") == "success":
+                if tr.get("project_id"): project_id = tr["project_id"]
+                step.status = "success"
+                step.result = f"Saved {len(tr.get('files', []))} files."
+                tool_result = tr
+            else:
+                step.status = "error"
+                step.error = tr.get("message", "Tool failed")
+                
+            step.latency_ms = step_latency
+            steps_completed += 1
+            add_step(run_id, i + 1, step_agent, step.description[:5000], "tool-script")
+            update_step(run_id, step_agent, status=step.status, output=(step.result or '')[:10000], latency_ms=step_latency, tokens=0)
+            continue
+
+        # Get model — canvas node override takes priority over config
         agent_cfg = MODELS.get(step_agent, MODELS["analyst"])
-        model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
+        default_model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
+        model = (node_models or {}).get(step_agent) or default_model
 
         await emitter.emit(
             run_id,
@@ -411,6 +632,16 @@ async def run_agent_mode(
 
             elif step_agent == "critic":
                 async for chunk in run_critic_async(
+                    context_prompt, model_override=model
+                ):
+                    step_result += chunk
+                    if len(step_result) % 50 == 0:
+                        await emitter.emit(
+                            run_id, step_agent, "update", output_str=step_result
+                        )
+
+            elif step_agent == "researcher":
+                async for chunk in run_researcher_async(
                     context_prompt, model_override=model
                 ):
                     step_result += chunk
@@ -462,12 +693,36 @@ async def run_agent_mode(
             final_result = step_result
 
         except Exception as e:
+            local_error = str(e)
+            log_agent_execution(run_id, step_agent, model, f"step_{step.step}_error", error=local_error)
+
+            LOCAL_FALLBACK = "deepseek-r1:8b"
+
+            # For all agents — fall back to light local model, never cloud
+            await emitter.emit(run_id, step_agent, "update",
+                    output_str=f"⚡ {model} unavailable — falling back to {LOCAL_FALLBACK}...")
+        step_result = ""
+        fb_start = time.time()
+        try:
+            gen = (run_coder_async(context_prompt, model_override=LOCAL_FALLBACK)
+                   if step_agent == "coder"
+                   else run_analyst_async(context_prompt, model_override=LOCAL_FALLBACK))
+            async for chunk in gen:
+                step_result += chunk
+                if len(step_result) % 80 == 0:
+                    await emitter.emit(run_id, step_agent, "update", output_str=step_result)
+            fb_latency = int((time.time() - fb_start) * 1000)
+            step.status = "success"
+            step.result = step_result[:3000]
+            step.latency_ms = fb_latency
+            steps_completed += 1
+            await emitter.emit(run_id, step_agent, "complete", output_str=step_result,
+                metadata={"latency_ms": fb_latency, "model": LOCAL_FALLBACK, "step": step.step})
+            final_result = step_result
+        except Exception as fe:
             step.status = "error"
-            step.error = str(e)
-            await emitter.emit(run_id, step_agent, "error", error=str(e))
-            log_agent_execution(
-                run_id, step_agent, model, f"step_{step.step}_error", error=str(e)
-            )
+            step.error = f"All local models failed: {fe}"
+            await emitter.emit(run_id, step_agent, "error", error=step.error)
             break
 
     # ── Step 4: Auto-Tool (save files FIRST so critic can validate actual code) ──
@@ -591,11 +846,23 @@ async def run_agent_mode(
                 )
 
                 try:
-                    from agents.critic import run_critic_async
-
                     critic_output = ""
-                    async for chunk in run_critic_async(critic_prompt_text):
-                        critic_output += chunk
+                    # 60s timeout — if critic model can't load, skip validation
+                    async def _run_critic_with_timeout():
+                        out = ""
+                        async for chunk in run_critic_async(critic_prompt_text):
+                            out += chunk
+                        return out
+
+                    try:
+                        critic_output = await asyncio.wait_for(
+                            _run_critic_with_timeout(), timeout=60.0
+                        )
+                    except asyncio.TimeoutError:
+                        await emitter.emit(run_id, "critic", "complete",
+                            output_str="Critic timed out — skipping validation",
+                            metadata={"skipped": True})
+                        critic_output = ""
 
                     # Parse critic response
                     from services.sanitizer import (
@@ -648,7 +915,7 @@ async def run_agent_mode(
                                 )
                             else:
                                 fix_model = MODELS.get(
-                                    "coder", {"name": "deepseek-coder-v2:16b"}
+                                    "coder", {"name": "qwen2.5-coder:14b"}
                                 )
                                 fix_model = (
                                     fix_model["name"]
@@ -674,8 +941,6 @@ async def run_agent_mode(
                                 )
 
                                 fixed = ""
-                                from agents.coder import run_coder_async
-
                                 async for chunk in run_coder_async(
                                     fix_prompt, model_override=fix_model
                                 ):
@@ -770,7 +1035,7 @@ async def run_agent_mode(
 
             if feedback and feedback.get("verdict") == "NEEDS_REVISION":
                 current_coder_model = MODELS.get(
-                    "coder", {"name": "deepseek-coder-v2:16b"}
+                    "coder", {"name": "qwen2.5-coder:14b"}
                 )
                 current_coder_model = (
                     current_coder_model["name"]
@@ -923,6 +1188,20 @@ async def run_agent_mode(
 
     log_pipeline_end(run_id, "success", total_latency, steps_completed)
 
+    # Signal all nodes to reset — frontend uses this to clear any stuck "running" states
+    await emitter.emit(
+        run_id, "system", "run_complete",
+        output_str=f"Pipeline finished in {total_latency}ms",
+        metadata={"total_latency_ms": total_latency, "steps": steps_completed},
+    )
+
+    # Release all models from VRAM after pipeline completes
+    try:
+        from services.vram_scheduler import unload_all
+        await unload_all()
+    except Exception:
+        pass
+
     return ExecutionResult(
         task_id=run_id,
         run_id=run_id,
@@ -977,7 +1256,7 @@ async def _run_feedback_loop(
         log_agent_execution(
             run_id,
             "critic",
-            MODELS.get("critic", {}).get("name", "llama3:8b"),
+            MODELS.get("critic", {}).get("name", "llama3.1:8b"),
             "feedback_complete",
             tokens_out=len(summary),
         )
@@ -1000,7 +1279,6 @@ async def _generate_readme_async(
     Called after tool agent creates the project files.
     """
     import os
-    from agents.critic import run_critic_async
 
     workspace_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "workspace"

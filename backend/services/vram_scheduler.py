@@ -38,10 +38,13 @@ if not logger.handlers:
 # ────────────────────────────────────────────────────────────────
 
 OLLAMA_BASE = "http://localhost:11434"
-HEAVY_THRESHOLD_GB = 10.0
+HEAVY_THRESHOLD_GB = 8.5
 
 # Static registry — updated dynamically on health check
 MODEL_REGISTRY: dict[str, dict] = {}
+
+# v4.0: Models that should never be unloaded from VRAM
+PINNED_MODELS: set[str] = {"llama3.1:8b"}
 
 
 def _parse_size_gb(size_bytes: int) -> float:
@@ -100,7 +103,7 @@ def get_model_info(model_name: str) -> dict:
 @dataclass
 class VRAMState:
     """Tracks current GPU memory usage and loaded models."""
-    total_gb: float = 24.0  # Adjust to your GPU
+    total_gb: float = 48.0  # 16GB VRAM + System RAM spillover
     used_gb: float = 0.0
     active_models: dict = field(default_factory=dict)  # name -> {size_gb, loaded_at}
 
@@ -299,6 +302,9 @@ async def _free_space_for(model_name: str):
     for name, info in sorted_models:
         if vram_state.free_gb >= needed:
             break
+        # v4.0: Never evict pinned models (unless the requestor is an evicts_pinned model)
+        if name in PINNED_MODELS:
+            continue
         await _ollama_unload(name)
         vram_state.used_gb -= info["size_gb"]
         del vram_state.active_models[name]
@@ -351,7 +357,7 @@ async def scheduled_generate(model: str, prompt: str, stream: bool = True):
         # Step 2: Execute the request
         try:
             if stream:
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with httpx.AsyncClient(timeout=600.0) as client:
                     async with client.stream(
                         "POST",
                         f"{OLLAMA_BASE}/api/generate",
@@ -368,7 +374,7 @@ async def scheduled_generate(model: str, prompt: str, stream: bool = True):
                                 except Exception:
                                     pass
             else:
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with httpx.AsyncClient(timeout=600.0) as client:
                     resp = await client.post(
                         f"{OLLAMA_BASE}/api/generate",
                         json={"model": model, "prompt": prompt, "stream": False},

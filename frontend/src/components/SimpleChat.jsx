@@ -6,6 +6,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { getAgents, getAgentById, loadAgentPrompts, getAgentPrompt, API, CHAT_API } from '../config/agents';
 import { useSimpleChatHistoryStore } from '../store/useSimpleChatHistoryStore';
 import ChatHistoryPanel from './ChatHistoryPanel';
+import VoiceButton from './VoiceButton';
 
 const PERSONA_ICONS = {
   unhinged_gf: Heart,
@@ -617,6 +618,12 @@ export default function SimpleChat() {
                   placeholder={`Ask ${currentLabel}...`}
                   rows={1}
                   className="flex-1 bg-transparent text-sm text-fgDefault placeholder-fgSubtle resize-none outline-none px-2 py-1.5 min-h-[36px] max-h-[160px] disabled:opacity-40"
+                />
+                <VoiceButton
+                  onTranscript={(text) => {
+                    setInput((prev) => (prev ? prev + " " + text : text));
+                  }}
+                  disabled={isStreaming}
                 />
                 <button
                   onClick={() => sendMessage()}

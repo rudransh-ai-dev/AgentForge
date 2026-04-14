@@ -5,6 +5,7 @@ import asyncio
 from typing import Optional
 from config import MODELS
 from services.ollama_client import async_generate_stream
+from services.vram_scheduler import scheduled_generate
 from services.event_emitter import emitter
 from services.sanitizer import (
     strip_prompt_leakage,
@@ -15,7 +16,7 @@ from services.sanitizer import (
 from core.memory import store_fix, get_similar_fixes
 from core.prompts import tool_prompt, coder_autofix_prompt
 
-WORKSPACE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "workspace")
+WORKSPACE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "workspace")
 
 
 async def run_tool_agent_async(run_id: str, prompt: str, project_id: str | None = None):
@@ -64,11 +65,118 @@ async def run_tool_agent_async(run_id: str, prompt: str, project_id: str | None 
             )
             result_json = ""
 
-    # AI PARSER: Fallback or if ---JSON--- isn't used
+    # RAW JSON FAST PATH: Try to parse the entire prompt as JSON directly.
+    # The Writer agent outputs pure JSON — no wrapping needed.
     if not result_json:
-        mgr_cfg = MODELS.get("manager", {"name": "llama3:8b"})
+        try:
+            raw = strip_prompt_leakage(prompt.strip())
+            # Strip leading/trailing markdown fences if present
+            raw = re.sub(r'^```(?:json)?\s*\n', '', raw)
+            raw = re.sub(r'\n\s*```\s*$', '', raw)
+            candidate = json.loads(raw)
+            if isinstance(candidate, dict) and "files" in candidate:
+                result_json = json.dumps(candidate)
+                await emitter.emit(
+                    run_id, node_id, "update",
+                    output_str="Parsed project JSON directly from agent output",
+                )
+        except Exception:
+            pass
+
+    # JSON-IN-MARKDOWN FAST PATH: If the model wrapped a full project
+    # structure inside a ```json ... ``` block, unwrap it and treat it
+    # as the project payload instead of saving the JSON literally.
+    # Uses GREEDY matching (.*) to capture the full nested JSON.
+    if not result_json:
+        json_blocks = re.findall(
+            r"```(?:json)?\s*\n(\{.+\})\s*```", prompt, re.DOTALL
+        )
+        for jb in json_blocks:
+            try:
+                candidate = json.loads(strip_prompt_leakage(jb))
+                if isinstance(candidate, dict) and (
+                    "files" in candidate or "project_id" in candidate
+                ):
+                    result_json = json.dumps(candidate)
+                    await emitter.emit(
+                        run_id, node_id, "update",
+                        output_str="Unwrapped JSON project structure from markdown block",
+                    )
+                    break
+            except Exception:
+                continue
+
+    # MARKDOWN FAST PATH: If the coder output contains fenced code blocks,
+    # extract them directly without calling an LLM. This avoids VRAM swap races
+    # and makes trivial tasks (hello world, calculator) instant.
+    if not result_json:
+        md_blocks = re.findall(
+            r"```([a-zA-Z0-9_+\-]*)\n(.*?)```", prompt, re.DOTALL
+        )
+        # Filter out any raw JSON blocks — those should have been handled
+        # by the JSON fast path above; if they slipped through, skip them
+        # here so we don't end up saving the project spec as `main.json`.
+        md_blocks = [
+            (lang, code) for (lang, code) in md_blocks
+            if (lang or "").lower() != "json"
+        ]
+        if md_blocks:
+            ext_map = {
+                "python": "py", "py": "py",
+                "javascript": "js", "js": "js",
+                "typescript": "ts", "ts": "ts",
+                "bash": "sh", "shell": "sh", "sh": "sh",
+                "html": "html", "css": "css",
+                "go": "go", "rust": "rs", "java": "java",
+                "c": "c", "cpp": "cpp", "c++": "cpp",
+                "json": "json", "yaml": "yml", "yml": "yml",
+            }
+            files = []
+            used_names = set()
+            deps = set()
+            
+            for idx, (lang, code) in enumerate(md_blocks):
+                lang_lc = (lang or "").lower()
+                ext = ext_map.get(lang_lc, "txt")
+                
+                # Extract python imports for dependencies
+                if ext == "py":
+                    for line in code.split("\n"):
+                        line = line.strip()
+                        if line.startswith("import "):
+                            for pkg in line[7:].split(","):
+                                deps.add(pkg.strip().split(".")[0])
+                        elif line.startswith("from ") and " import " in line:
+                            pkg = line[5:].split(" import ")[0].strip().split(".")[0]
+                            # exclude local imports
+                            if pkg and not pkg.startswith("."):
+                                deps.add(pkg)
+
+                # Try to recover a filename from a nearby "filename.ext" hint
+                name_hint = re.search(
+                    r"([a-zA-Z0-9_\-]+)\." + re.escape(ext), code[:200]
+                )
+                if name_hint:
+                    fname = f"{name_hint.group(1)}.{ext}"
+                else:
+                    base = "main" if idx == 0 else f"file_{idx}"
+                    fname = f"{base}.{ext}"
+                while fname in used_names:
+                    base, dot, rest = fname.rpartition(".")
+                    fname = f"{base}_{idx}.{rest}"
+                used_names.add(fname)
+                files.append({"name": fname, "content": code.strip()})
+            result_json = json.dumps({"files": files, "dependencies": list(deps)})
+            await emitter.emit(
+                run_id, node_id, "update",
+                output_str=f"Extracted {len(files)} file(s) and {len(deps)} dep(s) from markdown"
+            )
+
+    # AI PARSER: Fallback if markdown extraction also failed
+    if not result_json:
+        mgr_cfg = MODELS.get("manager", {"name": "llama3.1:8b"})
         mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
-        async for chunk in async_generate_stream(mgr_model, system_prompt):
+        async for chunk in scheduled_generate(mgr_model, system_prompt, stream=True):
             result_json += chunk
             # Throttle UI updates
             if len(result_json) % 40 == 0:
@@ -171,17 +279,32 @@ async def run_tool_agent_async(run_id: str, prompt: str, project_id: str | None 
                     f.write(content)
                 created_files.append(path)
 
-        # Save project.json metadata
-        meta = {
+        # Save project.json metadata (merge with existing if present)
+        meta_file = os.path.join(project_dir, "project.json")
+        meta = {}
+        if os.path.exists(meta_file):
+            try:
+                with open(meta_file, "r") as f:
+                    meta = json.load(f)
+            except Exception:
+                pass
+
+        merged_files = list(set(meta.get("files", []) + created_files))
+        merged_deps = list(set(meta.get("dependencies", []) + project_data.get("dependencies", [])))
+
+        meta.update({
             "project_id": pid,
-            "entry_point": project_data.get("entry_point", "main.py"),
-            "language": project_data.get("language", "python"),
-            "dependencies": project_data.get("dependencies", []),
-            "files": created_files,
-        }
-        with open(os.path.join(project_dir, "project.json"), "w") as f:
+            "entry_point": meta.get("entry_point") or project_data.get("entry_point", "main.py"),
+            "language": meta.get("language") or project_data.get("language", "python"),
+            "dependencies": merged_deps,
+            "files": merged_files,
+        })
+
+        with open(meta_file, "w") as f:
             json.dump(meta, f, indent=2)
-        created_files.append("project.json")
+            
+        if "project.json" not in created_files:
+            created_files.append("project.json")
 
         summary = (
             f"Project '{pid}' created ({len(created_files)} files):\n"

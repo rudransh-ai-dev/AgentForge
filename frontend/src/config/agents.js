@@ -4,10 +4,13 @@ export const API = "";
 export const CHAT_API = "/persona";
 
 const AGENT_META = [
-  { id: "manager", label: "Manager AI", icon: Cpu, color: "#06b6d4", desc: "System Planning" },
-  { id: "coder", label: "Coder", icon: Terminal, color: "#a855f7", desc: "Software Engineer" },
-  { id: "analyst", label: "Analyst", icon: BarChart3, color: "#22c55e", desc: "Data & Reasoning" },
-  { id: "critic", label: "Critic", icon: ShieldCheck, color: "#f59e0b", desc: "Review & Ethics" },
+  { id: "manager", label: "Orchestrator", icon: Cpu, color: "#06b6d4", desc: "llama3.1:8b (Planning)" },
+  { id: "writer", label: "Senior Coder", icon: Terminal, color: "#a855f7", desc: "qwen2.5-coder:14b (Drafting)" },
+  { id: "editor", label: "Code Editor", icon: Terminal, color: "#db2777", desc: "qwen2.5-coder:14b (Fixes)" },
+  { id: "tester", label: "QA Tester", icon: ShieldCheck, color: "#f59e0b", desc: "deepseek-r1:8b (Review)" },
+  { id: "researcher", label: "Researcher", icon: BarChart3, color: "#22c55e", desc: "qwen2.5:14b (Data)" },
+  { id: "heavy", label: "System Architect", icon: Cpu, color: "#6366f1", desc: "phi4:latest (Heavy Logic)" },
+  { id: "context_manager", label: "Context Manager", icon: BarChart3, color: "#14b8a6", desc: "llama3.1:8b (Resident)" },
 ];
 
 let _prompts = {};

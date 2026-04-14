@@ -165,14 +165,14 @@ async def chat_with_persona(
 
     # Determine model — persona-specific, NOT in global config
     PERSONA_MODELS = {
-        "unhinged_gf": "gurubot/girl",
-        "raw_bro": "gurubot/self-after-dark",
-        "savage_teacher": "huihui_ai/qwen3.5-abliterated",
-        "therapist": "huihui_ai/qwen3.5-abliterated",
-        "roaster": "huihui_ai/qwen3.5-abliterated",
+        "unhinged_gf": "llama3.1:8b:Q4_K_M",
+        "raw_bro": "gurubot/self-after-dark:latest",
+        "savage_teacher": "gurubot/self-after-dark:latest",
+        "therapist": "llama3.1:8b",
+        "roaster": "gurubot/self-after-dark:latest",
     }
 
-    actual_model = model or PERSONA_MODELS.get(persona_key, "gurubot/girl")
+    actual_model = model or PERSONA_MODELS.get(persona_key, "llama3.1:8b")
 
     # Generate response
     full_prompt = f"{final_system}\n\nUser: {cleaned_message}"
@@ -203,14 +203,14 @@ async def stream_chat_with_persona(
 
     # Determine model — persona-specific, NOT in global config
     PERSONA_MODELS = {
-        "unhinged_gf": "gurubot/girl",
-        "raw_bro": "gurubot/self-after-dark",
-        "savage_teacher": "huihui_ai/qwen3.5-abliterated",
-        "therapist": "huihui_ai/qwen3.5-abliterated",
-        "roaster": "huihui_ai/qwen3.5-abliterated",
+        "unhinged_gf": "llama3.1:8b:Q4_K_M",
+        "raw_bro": "gurubot/self-after-dark:latest",
+        "savage_teacher": "gurubot/self-after-dark:latest",
+        "therapist": "llama3.1:8b",
+        "roaster": "gurubot/self-after-dark:latest",
     }
 
-    actual_model = model or PERSONA_MODELS.get(persona_key, "gurubot/girl")
+    actual_model = model or PERSONA_MODELS.get(persona_key, "llama3.1:8b")
 
     full_prompt = f"{final_system}\n\nUser: {cleaned_message}"
     async for chunk in scheduled_generate(actual_model, full_prompt, stream=True):

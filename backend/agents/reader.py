@@ -11,7 +11,7 @@ async def run_reader_async(prompt: str, model_override: str | None = None):
     """
     Search and Read Files from the Project Workspace to answer context questions.
     """
-    agent_cfg = MODELS.get("analyst", {"name": "llama3:8b"})
+    agent_cfg = MODELS.get("analyst", {"name": "llama3.1:8b"})
     model = model_override or agent_cfg["name"]
 
     files_info = []

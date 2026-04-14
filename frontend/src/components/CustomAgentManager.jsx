@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Edit3, Send, Copy, Check, Loader2, X, RefreshCw, Cpu, ChevronDown } from 'lucide-react';
 
-const API = "http://127.0.0.1:8888";
+const API = "";
 
 const AGENT_COLORS = ['#58a6ff', '#3fb950', '#f85149', '#d29922', '#a371f7', '#db61a2', '#79c0ff', '#7ee787', '#ffa657', '#ff7b72'];
 

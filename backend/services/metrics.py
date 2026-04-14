@@ -103,7 +103,11 @@ def get_overview():
 def get_latency_timeseries(hours=24):
     conn = get_connection()
     cursor = conn.cursor()
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    # SQLite CURRENT_TIMESTAMP stores UTC as "YYYY-MM-DD HH:MM:SS".
+    # Using .isoformat() (T-separator) or .now() (local tz) breaks the
+    # string comparison and returns zero rows — the metrics panel's
+    # infamous "reading nothing" bug.
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute(
         """SELECT timestamp, latency_ms, model, status FROM metric_runs
            WHERE timestamp > ? AND latency_ms > 0
@@ -126,7 +130,7 @@ def get_latency_timeseries(hours=24):
 def get_vram_timeseries(hours=24):
     conn = get_connection()
     cursor = conn.cursor()
-    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute(
         """SELECT timestamp, total_gb, used_gb, active_models FROM metric_vram_samples
            WHERE timestamp > ?
@@ -147,6 +151,7 @@ def get_vram_timeseries(hours=24):
 
 
 def get_model_breakdown():
+    from config import MODELS
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -160,15 +165,34 @@ def get_model_breakdown():
     )
     rows = cursor.fetchall()
     conn.close()
-    return [
-        {
+    
+    db_stats = {}
+    for r in rows:
+        db_stats[r["model"]] = {
             "model": r["model"],
             "runs": r["runs"],
             "avg_latency_ms": round(r["avg_latency"], 0) if r["avg_latency"] else 0,
             "success_rate": round(r["success_rate"], 1),
         }
-        for r in rows
-    ]
+        
+    # Inject all configured models so they appear even if runs=0
+    all_models = set()
+    for v in MODELS.values():
+        if isinstance(v, dict):
+            all_models.add(v.get("name", ""))
+        else:
+            all_models.add(v)
+            
+    for m in all_models:
+        if m and m not in db_stats:
+            db_stats[m] = {
+                "model": m,
+                "runs": 0,
+                "avg_latency_ms": 0,
+                "success_rate": 0,
+            }
+            
+    return sorted(list(db_stats.values()), key=lambda x: x["runs"], reverse=True)
 
 
 def get_task_distribution():

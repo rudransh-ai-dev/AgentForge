@@ -196,7 +196,7 @@ export default function WorkspaceExplorer() {
         <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5">
           {projects.length === 0 ? (
             <div className="text-xs text-fgSubtle text-center py-10">
-              Workspace empty.<br/>Ask the Coder to generate a project.
+              Workspace empty.<br />Ask the Coder to generate a project.
             </div>
           ) : (
             projects.map((proj) => {
@@ -254,11 +254,10 @@ export default function WorkspaceExplorer() {
                       {proj.files.map(file => (
                         <div
                           key={file}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-xs group/file ${
-                            selectedFile === file && selectedProject === proj.project_id
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-xs group/file ${selectedFile === file && selectedProject === proj.project_id
                               ? 'bg-accent/10 text-accent'
                               : 'text-fgMuted hover:bg-canvas/50 hover:text-fgDefault'
-                          }`}
+                            }`}
                         >
                           <span
                             onClick={() => fetchFile(proj.project_id, file)}
@@ -352,11 +351,10 @@ export default function WorkspaceExplorer() {
         )}
 
         {runOutput && (
-          <div className={`border-t flex flex-col overflow-hidden ${
-            runOutput.status === 'success' ? 'border-success/20' :
-            runOutput.status === 'error' ? 'border-danger/20' :
-            'border-borderDefault/50'
-          }`}>
+          <div className={`border-t flex flex-col overflow-hidden ${runOutput.status === 'success' ? 'border-success/20' :
+              runOutput.status === 'error' ? 'border-danger/20' :
+                'border-borderDefault/50'
+            }`}>
             <div className="h-8 flex items-center justify-between px-3 glass border-b border-borderDefault/50">
               <div className="flex items-center gap-1.5 text-xs font-medium">
                 {runOutput.status === 'success' ? (
@@ -372,9 +370,8 @@ export default function WorkspaceExplorer() {
               </button>
             </div>
             <div className="h-40 p-3 overflow-auto">
-              <pre className={`text-xs font-mono whitespace-pre-wrap ${
-                runOutput.status === 'success' ? 'text-success' : 'text-danger'
-              }`}>
+              <pre className={`text-xs font-mono whitespace-pre-wrap ${runOutput.status === 'success' ? 'text-success' : 'text-danger'
+                }`}>
                 {runOutput.output || runOutput.errors || JSON.stringify(runOutput, null, 2)}
               </pre>
             </div>
