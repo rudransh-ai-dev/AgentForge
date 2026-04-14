@@ -1,15 +1,19 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Network, Terminal, ShieldAlert, Cpu, Database, Wrench, ArrowRight, Zap } from 'lucide-react';
+import { Network, Terminal, ShieldAlert, Cpu, Database, Wrench, ArrowRight, Zap, FileCode2, PenTool, FlaskConical, BookOpen, BrainCircuit } from 'lucide-react';
 
 export default function LandingPage({ onEnter }) {
   const agents = [
-    { name: "Manager", icon: <Cpu className="w-5 h-5" />, desc: "Central orchestrator. Plans, routes tasks, and synthesizes output.", model: "qwen2.5:14b", color: "accent" },
-    { name: "Coder", icon: <Terminal className="w-5 h-5" />, desc: "Autonomous developer. Writes, debugs, and refactors code.", model: "deepseek-coder-v2:16b", color: "done" },
-    { name: "Analyst", icon: <Database className="w-5 h-5" />, desc: "Data processing specialist. Summarizes and extracts insights.", model: "qwen2.5:14b", color: "success" },
-    { name: "Critic", icon: <ShieldAlert className="w-5 h-5" />, desc: "Quality assurance. Evaluates code for security and performance.", model: "devstral:24b", color: "attention" },
-    { name: "Tool Agent", icon: <Wrench className="w-5 h-5" />, desc: "Filesystem interaction. Reads, writes, and manages project files.", model: "Internal", color: "sponsors" },
-    { name: "Executor", icon: <Zap className="w-5 h-5" />, desc: "Sandbox execution engine. Runs generated code securely.", model: "Internal", color: "accent" },
+    { name: "Manager", icon: <Cpu className="w-5 h-5" />, desc: "Central orchestrator. Routes tasks, builds plans, and coordinates all agents.", model: "llama3.1:8b", color: "accent" },
+    { name: "Writer", icon: <PenTool className="w-5 h-5" />, desc: "Draft code generator. Produces initial multi-file project scaffolds.", model: "gpt-oss:20b", color: "done" },
+    { name: "Editor", icon: <FileCode2 className="w-5 h-5" />, desc: "Code refiner. Polishes Writer output for production quality.", model: "qwen2.5-coder:14b", color: "success" },
+    { name: "Tester", icon: <FlaskConical className="w-5 h-5" />, desc: "QA validator. Reviews code for bugs, security, and edge cases.", model: "deepseek-r1:8b", color: "attention" },
+    { name: "Analyst", icon: <Database className="w-5 h-5" />, desc: "Reasoning specialist. Summarizes data and extracts insights.", model: "llama3.1:8b", color: "accent" },
+    { name: "Researcher", icon: <BookOpen className="w-5 h-5" />, desc: "Deep context agent. Gathers and synthesizes broad knowledge.", model: "qwen2.5:14b", color: "sponsors" },
+    { name: "Reader", icon: <Terminal className="w-5 h-5" />, desc: "Codebase analyst. Reads project files and answers questions.", model: "llama3.1:8b", color: "success" },
+    { name: "Heavy Brain", icon: <BrainCircuit className="w-5 h-5" />, desc: "Architecture-level deep thinking for complex reasoning tasks.", model: "codestral:22b", color: "attention" },
+    { name: "Tool Agent", icon: <Wrench className="w-5 h-5" />, desc: "Filesystem interaction. Saves generated code to workspace.", model: "Internal", color: "sponsors" },
+    { name: "Executor", icon: <Zap className="w-5 h-5" />, desc: "Sandbox engine. Runs generated projects securely.", model: "Internal", color: "accent" },
   ];
 
   const colorMap = {
@@ -83,7 +87,7 @@ export default function LandingPage({ onEnter }) {
             className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-canvasSubtle/80 backdrop-blur-sm border border-borderDefault text-fgMuted text-xs font-medium mb-6 animate-border-glow"
           >
             <Network className="w-3.5 h-3.5" />
-            v3.1 Local Orchestrator
+            v4.2 Local Orchestrator
           </motion.div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6">
@@ -163,8 +167,8 @@ export default function LandingPage({ onEnter }) {
         >
           <div className="flex items-center justify-center gap-10 p-4 rounded-lg glass border border-borderDefault">
             {[
-              { label: 'Agents', value: '6' },
-              { label: 'Models', value: 'Local' },
+              { label: 'Agents', value: '10' },
+              { label: 'Models', value: '16' },
               { label: 'Privacy', value: '100%' },
               { label: 'Latency', value: '<2s' },
             ].map((stat, i) => (
@@ -180,6 +184,46 @@ export default function LandingPage({ onEnter }) {
           </div>
         </motion.div>
       </div>
+
+      {/* ── Footer ── */}
+      <footer className="relative z-10 w-full border-t border-borderDefault/30 py-8 px-6">
+        <div className="max-w-4xl mx-auto flex flex-col items-center gap-4 text-center">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent to-done flex items-center justify-center text-white text-xs font-bold">R</div>
+            <span className="text-sm font-semibold text-fgDefault">Built by Rudransh</span>
+          </div>
+
+          <div className="flex flex-col items-center gap-1.5 text-xs text-fgMuted leading-relaxed">
+            <span>BCA 6th Semester — <span className="text-fgSubtle font-medium">Chhatrapati Shahu Ji Maharaj University, Kanpur</span></span>
+            <span>Examination Roll No: <span className="text-accent font-mono font-semibold">23071000078</span></span>
+          </div>
+
+          <div className="flex items-center gap-4 mt-2">
+            <a
+              href="https://github.com/rudransh-ai-dev"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-canvas/60 border border-borderDefault/50 text-fgSubtle hover:text-accent hover:border-accent/30 transition-all text-xs font-medium"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              GitHub
+            </a>
+            <a
+              href="https://github.com/rudransh-ai-dev/ai-agent-ide-type-project-"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-canvas/60 border border-borderDefault/50 text-fgSubtle hover:text-accent hover:border-accent/30 transition-all text-xs font-medium"
+            >
+              <Network className="w-3.5 h-3.5" />
+              Source Code
+            </a>
+          </div>
+
+          <p className="text-[10px] text-fgSubtle/50 mt-3 tracking-wide">
+            100% Local · Zero Cloud · Built with Ollama, FastAPI, React & ❤️
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

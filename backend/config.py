@@ -74,8 +74,8 @@ MODELS = {
 
     # ── Heavy Brain (architecture-level fallback) ──
     "heavy": {
-        "name": "phi4:latest",
-        "size_gb": 17.0,
+        "name": "codestral:22b",
+        "size_gb": 12.0,
         "role": "architectural_reasoning",
         "exclusive": True,
         "evicts_pinned": True,

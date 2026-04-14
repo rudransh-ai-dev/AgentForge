@@ -7,5 +7,14 @@
     "color": "#58a6ff",
     "icon": "Cpu",
     "created_at": 1776078972.7512357
+  },
+  {
+    "id": "image_maker_",
+    "name": "image maker ",
+    "model": "gemma4:e4b",
+    "system_prompt": "hye i make images ",
+    "color": "#f85149",
+    "icon": "Cpu",
+    "created_at": 1776169674.024024
   }
 ]

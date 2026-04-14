@@ -1,5 +1,5 @@
 from typing import AsyncGenerator
-from services.ollama_client import async_generate
+from services.vram_scheduler import scheduled_generate
 from config import MODELS
 
 async def run_researcher_async(prompt: str, model_override: str = None) -> AsyncGenerator[str, None]:
@@ -10,5 +10,8 @@ async def run_researcher_async(prompt: str, model_override: str = None) -> Async
     default_model = agent_cfg["name"] if isinstance(agent_cfg, dict) else agent_cfg
     model = model_override or default_model
 
-    async for chunk in async_generate(prompt, model_name=model):
+    from core.prompts import researcher_prompt
+    system_prompt = researcher_prompt().format(prompt=prompt)
+
+    async for chunk in scheduled_generate(model, system_prompt, stream=True):
         yield chunk

@@ -23,7 +23,7 @@ function App() {
                 Dashboard
               </span>
             </div>
-            <span className="text-[9px] text-fgSubtle">v3.1</span>
+            <span className="text-[9px] text-fgSubtle">v4.2</span>
           </div>
           <div className="flex-1 min-h-0">
             <Dashboard />

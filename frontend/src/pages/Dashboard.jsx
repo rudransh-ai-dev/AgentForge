@@ -346,56 +346,167 @@ export default function Dashboard() {
   const isSidebarVisible = sidebarExpanded || sidebarPinned;
 
   return (
-    <div className="flex h-screen bg-gradient-bg-mesh text-fgDefault relative overflow-hidden font-sans">
+    <div className="flex flex-col h-screen gradient-bg-animated text-fgDefault relative overflow-hidden font-sans grain">
+      {/* Ambient floating orbs — sit behind everything */}
+      <div className="ambient-orb ambient-orb-1" />
+      <div className="ambient-orb ambient-orb-2" />
+      <div className="ambient-orb ambient-orb-3" />
+
+      {/* ══════════════════════════════════════════════════════
+          FULL-WIDTH TOP DOCK
+          ══════════════════════════════════════════════════════ */}
+      <div className="h-14 flex items-center gap-3 px-4 glass-strong shrink-0 relative z-40">
+        <div className="aurora-line absolute bottom-0 left-0 right-0" />
+
+        {/* Brand — always visible on the left */}
+        <div className="flex items-center gap-2.5 shrink-0 pr-3 mr-1 border-r" style={{ borderColor: 'var(--stroke-1)' }}>
+          <motion.div
+            className="p-2 rounded-xl shrink-0 relative"
+            style={{
+              background: 'linear-gradient(135deg, rgba(88,166,255,0.18), rgba(163,113,247,0.12))',
+              border: '1px solid rgba(88,166,255,0.3)',
+              boxShadow: '0 0 20px rgba(88,166,255,0.25), inset 0 1px 0 rgba(255,255,255,0.1)',
+            }}
+            animate={isSystemActive ? { scale: [1, 1.08, 1], rotate: [0, 3, -3, 0] } : {}}
+            transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            <BrainCircuit className="text-accent w-4 h-4" />
+          </motion.div>
+          <div className="flex flex-col leading-tight">
+            <h1 className="text-base font-bold text-gradient-premium whitespace-nowrap">
+              LocalAI
+            </h1>
+            <span className="text-[9px] text-fgSubtle whitespace-nowrap uppercase tracking-[0.15em] font-medium">
+              Multi-Agent IDE
+            </span>
+          </div>
+        </div>
+
+        <div className="flex-1 max-w-2xl flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fgSubtle" />
+            <input
+              ref={searchInputRef}
+              name="command-input"
+              id="command-input"
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleQuery}
+              disabled={isProcessing || isSystemActive}
+              placeholder={isSystemActive ? "Processing..." : "Run a task... (Ctrl+K)"}
+              className="w-full bg-canvas/50 border border-borderDefault/50 rounded-lg py-1.5 pl-9 pr-14 text-sm text-fgDefault placeholder-fgSubtle focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 disabled:opacity-40 transition-all focus:shadow-[0_0_16px_rgba(88,166,255,0.2)]"
+            />
+            <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
+              <span className="text-[10px] font-mono bg-canvasSubtle/50 border border-borderDefault/50 text-fgSubtle px-1.5 py-0.5 rounded">Ctrl+K</span>
+            </div>
+          </div>
+
+          <VoiceButton
+            onTranscript={(text) => setQuery((prev) => prev ? prev + ' ' + text : text)}
+            disabled={isProcessing || isSystemActive}
+          />
+
+          <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center bg-canvas/50 border border-borderDefault/50 rounded-lg p-0.5">
+              {['auto', 'direct', 'agent'].map(mode => (
+                <motion.button
+                  key={mode}
+                  onClick={() => setExecMode(mode)}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${
+                    execMode === mode
+                      ? 'bg-gradient-to-r from-accent/20 to-accent/5 text-accent shadow-sm'
+                      : 'text-fgSubtle hover:text-fgDefault hover:bg-canvasSubtle/50'
+                  }`}
+                  title={`Run in ${mode} mode`}
+                >
+                  {mode}
+                </motion.button>
+              ))}
+            </div>
+
+            <motion.button
+              onClick={() => setAllowHeavy(!allowHeavy)}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-all shrink-0 ${
+                allowHeavy
+                  ? 'bg-gradient-to-r from-done/15 to-done/5 text-done border-done/20 glow-accent'
+                  : 'bg-canvas/50 text-fgSubtle border-borderDefault/50 hover:bg-canvasSubtle/50'
+              }`}
+              title="Allow Heavy Models"
+            >
+              <BrainCircuit className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">{allowHeavy ? 'Deep Think' : 'Fast'}</span>
+            </motion.button>
+          </div>
+        </div>
+
+        <div className="flex-1" />
+
+        <div className="flex items-center gap-2 shrink-0">
+          <TopClock />
+          <ConnectionStatus health={health} wsStatus={wsStatus} />
+
+
+
+          <motion.button
+            onClick={handleClearLogs}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            className="flex items-center gap-1 px-2 py-1 bg-canvas/50 hover:bg-canvasSubtle/50 border border-borderDefault/50 rounded-lg text-fgSubtle hover:text-fgDefault text-xs transition-colors"
+          >
+            Clear
+          </motion.button>
+
+          <motion.button
+            onClick={handleStop}
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+              isSystemActive
+                ? 'bg-gradient-to-r from-danger/15 to-danger/5 hover:from-danger/20 hover:to-danger/10 border-danger/20 text-danger glow-danger'
+                : 'bg-canvas/50 hover:bg-danger/10 border-borderDefault/50 hover:border-danger/20 text-fgSubtle hover:text-danger'
+            }`}
+            title="Stop all running agents"
+          >
+            <Square className="w-3 h-3 fill-current" /> Stop
+          </motion.button>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════
+          SIDEBAR + CONTENT ROW
+          ══════════════════════════════════════════════════════ */}
+      <div className="flex flex-1 min-h-0 relative">
+
       <motion.div
-        className="flex flex-col glass-strong border-r border-borderDefault/50 relative z-30 shrink-0"
-        animate={{ width: isSidebarVisible ? 220 : 48 }}
+        className="flex flex-col glass-strong border-r relative z-30 shrink-0"
+        style={{ borderColor: 'var(--stroke-2)' }}
+        animate={{ width: isSidebarVisible ? 220 : 56 }}
         transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
         onMouseEnter={() => !sidebarPinned && setSidebarExpanded(true)}
         onMouseLeave={() => !sidebarPinned && setSidebarExpanded(false)}
       >
-        <div className="flex items-center gap-2.5 px-3 py-3 border-b border-borderDefault/50 min-h-[48px]">
-          <motion.div
-            className="p-1.5 rounded-md bg-canvas/50 border border-borderDefault shrink-0"
-            animate={isSystemActive ? { scale: [1, 1.05, 1] } : {}}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            <BrainCircuit className="text-accent w-4 h-4" />
-          </motion.div>
-          <AnimatePresence>
-            {isSidebarVisible && (
-              <motion.div
-                initial={{ opacity: 0, x: -8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -8 }}
-                transition={{ duration: 0.15 }}
-                className="overflow-hidden"
-              >
-                <h1 className="text-sm font-semibold text-gradient-accent whitespace-nowrap">
-                  LocalAI
-                </h1>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        <div className="flex-1 flex flex-col px-2 py-2 overflow-y-auto">
+        <div className="flex-1 flex flex-col px-2 py-3 overflow-y-auto">
           <div className="space-y-0.5 mb-2">
             {TABS.map((tab) => (
               <motion.button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                whileHover={{ x: 2 }}
-                whileTap={{ scale: 0.98 }}
-                className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition-all relative ${activeTab === tab.id
-                    ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent font-medium glow-accent'
+                whileHover={{ x: isSidebarVisible ? 2 : 0, scale: isSidebarVisible ? 1 : 1.08 }}
+                whileTap={{ scale: 0.95 }}
+                className={`w-full flex items-center ${isSidebarVisible ? 'justify-start gap-2.5 px-2.5' : 'justify-center px-0'} h-10 rounded-lg text-sm transition-all relative ${activeTab === tab.id
+                    ? 'bg-gradient-to-r from-accent/20 to-accent/5 text-accent font-medium glow-accent'
                     : 'text-fgMuted hover:text-fgDefault hover:bg-canvas/50'
                   }`}
                 title={!isSidebarVisible ? tab.label : undefined}
               >
                 <motion.span
-                  className={`shrink-0 ${activeTab === tab.id ? 'text-accent animate-icon-bounce' : ''}`}
-                  animate={activeTab === tab.id ? { filter: 'drop-shadow(0 0 4px rgba(88,166,255,0.4))' } : {}}
+                  className={`shrink-0 flex items-center justify-center ${activeTab === tab.id ? 'text-accent' : ''}`}
+                  animate={activeTab === tab.id ? { filter: 'drop-shadow(0 0 6px rgba(88,166,255,0.5))' } : {}}
                 >
                   {tab.icon}
                 </motion.span>
@@ -452,99 +563,7 @@ export default function Dashboard() {
         </div>
       </motion.div>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-12 border-b border-borderDefault/50 flex items-center gap-3 px-4 glass-strong shrink-0">
-          <div className="flex-1 max-w-2xl flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fgSubtle" />
-              <input
-                ref={searchInputRef}
-                name="command-input"
-                id="command-input"
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={handleQuery}
-                disabled={isProcessing || isSystemActive}
-                placeholder={isSystemActive ? "Processing..." : "Run a task... (Ctrl+K)"}
-                className="w-full bg-canvas/50 border border-borderDefault/50 rounded-md py-1.5 pl-9 pr-14 text-sm text-fgDefault placeholder-fgSubtle focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/20 disabled:opacity-40 transition-all focus:shadow-[0_0_10px_rgba(88,166,255,0.1)]"
-              />
-              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
-                <span className="text-[10px] font-mono bg-canvasSubtle/50 border border-borderDefault/50 text-fgSubtle px-1.5 py-0.5 rounded">Ctrl+K</span>
-              </div>
-            </div>
-
-            <VoiceButton
-              onTranscript={(text) => setQuery((prev) => prev ? prev + ' ' + text : text)}
-              disabled={isProcessing || isSystemActive}
-            />
-
-            <div className="flex items-center gap-1 shrink-0">
-              <div className="flex items-center bg-canvas/50 border border-borderDefault/50 rounded-md p-0.5">
-                {['auto', 'direct', 'agent'].map(mode => (
-                  <motion.button
-                    key={mode}
-                    onClick={() => setExecMode(mode)}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    className={`px-2.5 py-1 text-[11px] font-medium rounded transition-all ${
-                      execMode === mode
-                        ? 'bg-gradient-to-r from-accent/15 to-accent/5 text-accent shadow-sm'
-                        : 'text-fgSubtle hover:text-fgDefault hover:bg-canvasSubtle/50'
-                    }`}
-                    title={`Run in ${mode} mode`}
-                  >
-                    {mode}
-                  </motion.button>
-                ))}
-              </div>
-
-              <motion.button
-                onClick={() => setAllowHeavy(!allowHeavy)}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-md border transition-all shrink-0 ${
-                  allowHeavy
-                    ? 'bg-gradient-to-r from-done/15 to-done/5 text-done border-done/20 glow-accent'
-                    : 'bg-canvas/50 text-fgSubtle border-borderDefault/50 hover:bg-canvasSubtle/50'
-                }`}
-                title="Allow Heavy Models"
-              >
-                <BrainCircuit className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">{allowHeavy ? 'Deep Think' : 'Fast'}</span>
-              </motion.button>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <TopClock />
-            <ConnectionStatus health={health} wsStatus={wsStatus} />
-
-            <motion.button
-              onClick={handleClearLogs}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="flex items-center gap-1 px-2 py-1 bg-canvas/50 hover:bg-canvasSubtle/50 border border-borderDefault/50 rounded-md text-fgSubtle hover:text-fgDefault text-xs transition-colors"
-            >
-              Clear
-            </motion.button>
-
-            <motion.button
-              onClick={handleStop}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs font-medium transition-all ${
-                isSystemActive
-                  ? 'bg-gradient-to-r from-danger/15 to-danger/5 hover:from-danger/20 hover:to-danger/10 border-danger/20 text-danger glow-danger'
-                  : 'bg-canvas/50 hover:bg-danger/10 border-borderDefault/50 hover:border-danger/20 text-fgSubtle hover:text-danger'
-              }`}
-              title="Stop all running agents"
-            >
-              <Square className="w-3 h-3 fill-current" /> Stop
-            </motion.button>
-          </div>
-        </div>
-
+      <div className="flex-1 flex flex-col min-w-0 relative z-10">
         <div className="flex-1 flex overflow-hidden">
           <AnimatePresence mode="wait">
             {activeTab === 'chat' && (
@@ -657,9 +676,11 @@ export default function Dashboard() {
             )}
           </AnimatePresence>
         </div>
-
-        <StatusBar health={health} wsStatus={wsStatus} sysStats={sysStats} isSystemActive={isSystemActive} />
       </div>
+
+      </div> {/* /sidebar+content row */}
+
+      <StatusBar health={health} wsStatus={wsStatus} sysStats={sysStats} isSystemActive={isSystemActive} />
     </div>
   );
 }

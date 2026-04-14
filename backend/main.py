@@ -298,6 +298,16 @@ async def run(body: RunRequest):
         # AUTO mode: let the router decide
         if mode == "auto":
             p = body.prompt.lower()
+
+            # Research-type prompts → agent mode with researcher
+            is_research = any(kw in p for kw in [
+                "explain", "what is", "how does", "how do", "why does", "why do",
+                "compare", "difference between", "pros and cons", "research",
+                "summarize", "overview", "describe", "define", "meaning of",
+                "tell me about", "what are", "how to", "guide", "tutorial",
+                "best practices", "advantages", "disadvantages",
+            ])
+
             is_complex = any(kw in p for kw in [
                 # build tasks
                 "build", "create", "project", "implement", "develop", "architect",
@@ -318,7 +328,12 @@ async def run(body: RunRequest):
                 "fix this", "debug this", "refactor", "optimize this",
                 "add tests", "unit test", "write test",
             ])
-            mode = "agent" if is_complex else "direct"
+
+            if is_research and not is_complex:
+                mode = "agent"
+                body.research_mode = True
+            else:
+                mode = "agent" if is_complex else "direct"
 
         if mode == "direct":
             result = await run_direct_mode(

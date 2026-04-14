@@ -82,6 +82,7 @@ MODEL_DOWNGRADES = {
     "llama3.1:8b":        "deepseek-r1:8b",
     "deepseek-r1:8b":     "llama3.1:8b",
     "phi4:latest":        "qwen2.5-coder:14b",
+    "codestral:22b":      "gpt-oss:20b",
     "gemma4:26b":         "gpt-oss:20b",
 }
 
@@ -316,12 +317,17 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
     writer_model = _model_name("writer", "gpt-oss:20b")
     editor_model = _model_name("editor", "qwen2.5-coder:14b")
 
+    # Deep Think mode: swap writer to the heavy model for stronger drafts
+    if allow_heavy:
+        heavy_model = _model_name("heavy", "codestral:22b")
+        writer_model = heavy_model
+
     # -- STAGE 1: WRITER --
-    await emitter.emit(run_id, "writer", "start", input_str=f"Stage 1/3: Writer ({writer_model}) drafting architecture and code...")
+    await emitter.emit(run_id, "writer", "start", input_str=f"Stage 1/3: {'🧠 Deep Think' if allow_heavy else 'Writer'} ({writer_model}) drafting architecture and code...")
     stage_start = time.time()
     draft_output = ""
     try:
-        async for chunk in run_writer_async(prompt):
+        async for chunk in run_writer_async(prompt, model_override=writer_model):
             draft_output += chunk
             if len(draft_output) % 50 == 0:
                 await emitter.emit(run_id, "writer", "update", output_str=draft_output)
@@ -553,6 +559,40 @@ async def run_agent_mode(
 
     is_complex_code_req = any(trig in prompt.lower() for trig in COMPLEXITY_TRIGGERS)
 
+    # ── Researcher Route: direct model call, no code pipeline ──
+    if route == "researcher":
+        researcher_model = _get_agent_model("researcher", allow_heavy)
+        await emitter.emit(run_id, "researcher", "start",
+            input_str=f"Researching: {prompt[:100]}...")
+
+        result = ""
+        res_start = time.time()
+        try:
+            async for chunk in run_researcher_async(prompt):
+                result += chunk
+                if len(result) % 80 == 0:
+                    await emitter.emit(run_id, "researcher", "update", output_str=result)
+
+            res_latency = int((time.time() - res_start) * 1000)
+            await emitter.emit(run_id, "researcher", "complete", output_str=result,
+                metadata={"latency_ms": res_latency, "model": researcher_model})
+
+            total_latency = int((time.time() - start_time) * 1000)
+            from services.metrics import record_run
+            record_run(run_id, "agent", "researcher", researcher_model,
+                total_latency, len(result), "success", session_id or "")
+            update_run(run_id, status="success", total_latency_ms=total_latency)
+            log_pipeline_end(run_id, "success", total_latency, 1)
+            return ExecutionResult(task_id=run_id, run_id=run_id, mode="agent", route="researcher",
+                result=result[:3000], total_latency_ms=total_latency, status="success")
+        except Exception as e:
+            await emitter.emit(run_id, "researcher", "error", error=str(e))
+            total_latency = int((time.time() - start_time) * 1000)
+            update_run(run_id, status="error", total_latency_ms=total_latency)
+            return ExecutionResult(task_id=run_id, run_id=run_id, mode="agent", route="researcher",
+                result=f"Research failed: {e}", total_latency_ms=total_latency, status="error")
+
+    # ── Production Code Pipeline (Writer → Editor → Tester) ──
     if route == "writer" or route == "coder" or (route == "coder" and is_complex_code_req):
         final_result = await run_production_pipeline_async(prompt, run_id, project_id, emitter, allow_heavy)
         
