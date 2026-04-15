@@ -7,8 +7,8 @@ For optimal performance (as demonstrated), the system is designed for high-end w
 
 ### 1.1 Minimum Specs (for "Lite" use)
 - **CPU**: 6-core modern processor (Intel i5/i7 or AMD Ryzen 5/7).
-- **RAM**: 16 GB DDR4/DDR5.
-- **GPU**: 8 GB VRAM (Nvidia RTX series recommended).
+- **RAM**: 32 GB DDR4/DDR5.
+- **GPU**: 16 GB VRAM (Nvidia RTX series recommended).
 - **Storage**: 50 GB SSD space (for AI model weights).
 
 ### 1.2 Recommended Specs (The "Supercomputer" Experience)
