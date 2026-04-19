@@ -374,7 +374,7 @@ export default function Dashboard() {
           </motion.div>
           <div className="flex flex-col leading-tight">
             <h1 className="text-base font-bold text-gradient-premium whitespace-nowrap">
-              LocalAI
+              AgentForge
             </h1>
             <span className="text-[9px] text-fgSubtle whitespace-nowrap uppercase tracking-[0.15em] font-medium">
               Multi-Agent IDE

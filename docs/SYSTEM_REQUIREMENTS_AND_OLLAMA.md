@@ -1,6 +1,6 @@
 # System Requirements & Setup Guide
 
-This document outlines the hardware and software needed to run the AI Agent IDE. 
+This document outlines the hardware and software needed to run AgentForge. 
 
 ## 1. Hardware Requirements
 For optimal performance (as demonstrated), the system is designed for high-end workstations.

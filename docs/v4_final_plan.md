@@ -1,4 +1,4 @@
-# AI Agent IDE — v4.0 Final Architecture Plan
+# AgentForge — v4.0 Final Architecture Plan
 > **Status: APPROVED FOR IMPLEMENTATION**  
 > **Version:** 4.0  
 > **Hardware Target:** NVIDIA RTX 5070 Ti — 16 GB GDDR7 VRAM @ 896 GB/s  

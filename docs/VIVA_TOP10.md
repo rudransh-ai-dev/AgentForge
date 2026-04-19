@@ -1,4 +1,4 @@
-# 🎯 Top 10 Viva Questions — LocalAI Multi-Agent IDE
+# 🎯 Top 10 Viva Questions — AgentForge Multi-Agent IDE
 
 > **Quick-prep cheat sheet for academic viva / project presentation**
 
@@ -230,4 +230,4 @@ Several improvements are architecturally planned or easily achievable:
 
 ---
 
-*Generated for BCA 6th Semester Project Viva — LocalAI Multi-Agent IDE*
+*Generated for BCA 6th Semester Project Viva — AgentForge Multi-Agent IDE*

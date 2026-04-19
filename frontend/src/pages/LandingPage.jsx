@@ -91,7 +91,7 @@ export default function LandingPage({ onEnter }) {
           </motion.div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6">
-            <span className="text-gradient">AI Agent IDE</span>
+            <span className="text-gradient">AgentForge</span>
           </h1>
 
           <motion.p

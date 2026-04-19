@@ -16,5 +16,23 @@
     "color": "#f85149",
     "icon": "Cpu",
     "created_at": 1776169674.024024
+  },
+  {
+    "id": "c++",
+    "name": "c++",
+    "model": "gpt-oss:20b",
+    "system_prompt": "you need to code in c++",
+    "color": "#d29922",
+    "icon": "Cpu",
+    "created_at": 1776222963.5363724
+  },
+  {
+    "id": "yagsh",
+    "name": "Yagsh",
+    "model": "hf.co/TrevorJS/gemma-4-E2B-it-uncensored-GGUF:Q4_K_M",
+    "system_prompt": "Gsgsjsbs",
+    "color": "#db61a2",
+    "icon": "Cpu",
+    "created_at": 1776239138.3550072
   }
 ]

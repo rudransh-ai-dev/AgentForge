@@ -1,6 +1,6 @@
 """
-AI Agent IDE — Main API Server (v3.1 Final)
-============================================
+AgentForge — Main API Server (v3.1 Final)
+==========================================
 
 Production-grade multi-agent orchestration server.
 
@@ -108,7 +108,7 @@ os.makedirs(WORKSPACE_DIR, exist_ok=True)
 active_tasks = {}  # run_id -> asyncio.Task
 
 app = FastAPI(
-    title="AI Agent IDE",
+    title="AgentForge",
     description="VRAM-aware multi-agent inference pipeline",
     version="3.1",
 )
@@ -275,6 +275,7 @@ class ChatMessage(BaseModel):
     message: str
     model: Optional[str] = None
     session_id: Optional[str] = None
+    custom_prompt: Optional[str] = None
 
 
 @app.post("/run")

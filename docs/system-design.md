@@ -1,4 +1,4 @@
-# AI Agent IDE — System Architecture (v3.1 Final)
+# AgentForge — System Architecture (v3.1 Final)
 
 > **Architecture Grade: 9.5/10 — Production-Ready**
 > **Identity: Deterministic, resource-aware multi-agent inference system**

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "🚀 Starting Ollama model downloads for the AI Agent IDE..."
+echo "🚀 Starting Ollama model downloads for AgentForge..."
 
 # List of all models used in the project config
 MODELS=(

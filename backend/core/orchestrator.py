@@ -314,7 +314,7 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
         cfg = MODELS.get(agent, {"name": fallback})
         return cfg["name"] if isinstance(cfg, dict) else cfg
 
-    writer_model = _model_name("writer", "gpt-oss:20b")
+    writer_model = _model_name("writer", "qwen2.5-coder:14b")
     editor_model = _model_name("editor", "qwen2.5-coder:14b")
 
     # Deep Think mode: swap writer to the heavy model for stronger drafts
@@ -327,23 +327,26 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
     stage_start = time.time()
     draft_output = ""
     try:
+        writer_chunks = 0
         async for chunk in run_writer_async(prompt, model_override=writer_model):
             draft_output += chunk
-            if len(draft_output) % 50 == 0:
+            writer_chunks += 1
+            if writer_chunks % 8 == 0:
                 await emitter.emit(run_id, "writer", "update", output_str=draft_output)
 
         await emitter.emit(run_id, "writer", "complete", output_str=draft_output[:2000] + "\n...[truncated]...", metadata={"latency_ms": int((time.time() - stage_start) * 1000)})
-        # Unload writer immediately — use the actual writer model name,
-        # not a hardcoded string. Before this fix, the release was firing
-        # against qwen2.5-coder:14b (the editor), which evicted the wrong
-        # model and forced a reload next stage.
-        await release_model(writer_model)
+        # Only release writer if it differs from editor — otherwise we'd
+        # unload the model and immediately reload it for stage 2. Saves
+        # 20-40s per run when writer and editor share the same model.
+        if writer_model != editor_model:
+            await release_model(writer_model)
     except Exception as e:
         await emitter.emit(run_id, "writer", "error", error=str(e))
         return None  # Fallback gracefully if Writer dies entirely
 
     # -- STAGE 2 & 3: EDITOR -> TESTER FEEDBACK LOOP --
-    max_retries = 3
+    # Reduced from 3 to 1 retry: worst-case latency halved for the demo.
+    max_retries = 1
     refined_output = draft_output
     tester_feedback = ""
     
@@ -354,9 +357,11 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
         stage_start = time.time()
         temp_refined = ""
         try:
+            editor_chunks = 0
             async for chunk in run_editor_async(prompt, draft_output, fix_instructions=tester_feedback):
                 temp_refined += chunk
-                if len(temp_refined) % 50 == 0:
+                editor_chunks += 1
+                if editor_chunks % 8 == 0:
                     await emitter.emit(run_id, "editor", "update", output_str=temp_refined)
             
             refined_output = temp_refined
@@ -402,11 +407,17 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
             break # Can't loop without a tester
             
     # Auto-Tool Saving
-    await emitter.emit(run_id, "tool", "start", input_str="Saving generated workspace files...")
-    tool_resp = await run_tool_agent_async(run_id, refined_output, project_id=project_id)
+    # Note: run_tool_agent_async emits its own "tool start" with a more
+    # descriptive message, so we skip the duplicate start here.
+    try:
+        tool_resp = await run_tool_agent_async(run_id, refined_output, project_id=project_id)
+    except Exception as e:
+        await emitter.emit(run_id, "tool", "error", error=f"Tool agent crashed: {e}")
+        tool_resp = {"status": "error", "message": str(e)}
     if tool_resp and tool_resp.get("status") == "success":
         await emitter.emit(run_id, "tool", "complete", output_str=f"Saved {len(tool_resp.get('files', []))} files.")
-    else:
+    elif not (tool_resp and tool_resp.get("status") == "error"):
+        # Only emit a generic error if the tool agent didn't already emit its own
         await emitter.emit(run_id, "tool", "error", error="Failed to save files.")
         
     # Generate README

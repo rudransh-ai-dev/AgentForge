@@ -1,4 +1,4 @@
-# Operation Manual: Using the AI Agent IDE
+# Operation Manual: Using AgentForge
 
 This guide explains how to interact with the system once it is set up and running.
 

@@ -20,11 +20,12 @@ MODELS = {
     },
 
     # ── Production Coding Pipeline (3-Stage) ──
-    # Writer and Editor MUST be different models — using the same one
-    # collapses the 3-stage pipeline into pointless self-review.
+    # Demo config: writer and editor share the same model so the pipeline
+    # loads qwen2.5-coder:14b exactly once instead of swapping 20B→14B.
+    # Saves ~30-60s per run. Deep Think mode still swaps to codestral:22b.
     "writer": {
-        "name": "gpt-oss:20b",
-        "size_gb": 13.0,
+        "name": "qwen2.5-coder:14b",
+        "size_gb": 9.0,
         "role": "code_generation_draft",
         "exclusive": True,
     },
@@ -35,8 +36,8 @@ MODELS = {
         "exclusive": True,
     },
     "tester": {
-        "name": "deepseek-r1:8b",
-        "size_gb": 5.2,
+        "name": "llama3.1:8b",
+        "size_gb": 4.9,
         "role": "qa_validation",
     },
 
@@ -124,9 +125,9 @@ TASK_ROUTER = {
 
 AVAILABLE_MODELS = {
     "manager": "llama3.1:8b",
-    "writer": "gpt-oss:20b",
+    "writer": "qwen2.5-coder:14b",
     "editor": "qwen2.5-coder:14b",
-    "tester": "deepseek-r1:8b",
+    "tester": "llama3.1:8b",
     "coder": "qwen2.5-coder:14b",
     "critic": "deepseek-r1:8b",
     "analyst": "llama3.1:8b",

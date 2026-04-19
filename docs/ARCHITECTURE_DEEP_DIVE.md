@@ -1,6 +1,6 @@
 # Technical Architecture Deep Dive
 
-This document explains the internal engineering of the AI Agent IDE, focusing on the Multi-Agent Orchestration and VRAM Management.
+This document explains the internal engineering of AgentForge, focusing on the Multi-Agent Orchestration and VRAM Management.
 
 ## 1. High-Level Communication Flow
 The system follows a **Modular Publisher-Subscriber** pattern via WebSockets:

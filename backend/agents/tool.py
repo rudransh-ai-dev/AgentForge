@@ -176,16 +176,27 @@ async def run_tool_agent_async(run_id: str, prompt: str, project_id: str | None 
     if not result_json:
         mgr_cfg = MODELS.get("manager", {"name": "llama3.1:8b"})
         mgr_model = mgr_cfg["name"] if isinstance(mgr_cfg, dict) else mgr_cfg
-        async for chunk in scheduled_generate(mgr_model, system_prompt, stream=True):
-            result_json += chunk
-            # Throttle UI updates
-            if len(result_json) % 40 == 0:
-                await emitter.emit(
-                    run_id,
-                    node_id,
-                    "update",
-                    output_str=f"Parsing structure...\n{result_json[-300:]}",
-                )
+        await emitter.emit(
+            run_id, node_id, "update",
+            output_str=f"Fast paths missed — invoking AI parser ({mgr_model})..."
+        )
+        try:
+            chunk_count = 0
+            async for chunk in scheduled_generate(mgr_model, system_prompt, stream=True):
+                result_json += chunk
+                chunk_count += 1
+                # Emit every 10 chunks so the UI gets a live heartbeat
+                if chunk_count % 10 == 0:
+                    await emitter.emit(
+                        run_id,
+                        node_id,
+                        "update",
+                        output_str=f"Parsing structure...\n{result_json[-300:]}",
+                    )
+        except Exception as e:
+            error_msg = f"Tool AI parser failed: {e}"
+            await emitter.emit(run_id, node_id, "error", error=error_msg)
+            return {"status": "error", "message": error_msg}
 
     try:
         # Sanitize: strip any prompt leakage before parsing

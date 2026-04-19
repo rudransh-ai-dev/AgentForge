@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ══════════════════════════════════════════════════════════════
-# AI Agent IDE — Unified Start Script
+# AgentForge — Unified Start Script
 # ══════════════════════════════════════════════════════════════
 # Usage:
 #   ./start.sh              — Start everything (backend + frontend)

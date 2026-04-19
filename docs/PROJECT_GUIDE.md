@@ -1,4 +1,4 @@
-# LocalAI — Multi-Agent IDE: Comprehensive Project Guide
+# AgentForge — Multi-Agent IDE: Comprehensive Project Guide
 > **Version:** v3.1 / v4.0 Production  
 > **Hardware Target:** RTX 5070 Ti — 16 GB GDDR7 VRAM  
 > **Stack:** FastAPI (Python) + React (Vite) + Ollama + SQLite  
@@ -66,7 +66,7 @@
 
 ## 1. Project Overview
 
-**LocalAI Multi-Agent IDE** is a fully local, offline-first AI-powered Integrated Development Environment (IDE). It orchestrates multiple AI language models (LLMs) running on-device via [Ollama](https://ollama.com/) to collaboratively plan, write, review, test, and execute code — all without sending data to any cloud service.
+**AgentForge Multi-Agent IDE** is a fully local, offline-first AI-powered Integrated Development Environment (IDE). It orchestrates multiple AI language models (LLMs) running on-device via [Ollama](https://ollama.com/) to collaboratively plan, write, review, test, and execute code — all without sending data to any cloud service.
 
 ### Core Capabilities
 | Feature | Description |
@@ -292,7 +292,7 @@ ai-agent-ide-type-project/
 
 **FastAPI App Initialization (lines 110–122)**
 ```python
-app = FastAPI(title="AI Agent IDE", description="VRAM-aware multi-agent inference pipeline", version="3.1")
+app = FastAPI(title="AgentForge", description="VRAM-aware multi-agent inference pipeline", version="3.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)
 ```
 - The `CORSMiddleware` allows the React frontend (served on a different port) to call the API without CORS errors.
@@ -1469,7 +1469,7 @@ Contains Ollama model download automation scripts — useful for setting up the 
 
 ### 🔷 SECTION A — Project Overview & Architecture
 
-**Q1. What is LocalAI Multi-Agent IDE?**  
+**Q1. What is AgentForge Multi-Agent IDE?**  
 A: It is a fully offline, local-first AI-powered IDE that uses multiple LLMs running via Ollama to collaboratively plan, write, review, test, and execute code without any cloud dependency.
 
 **Q2. What is the technology stack?**  
@@ -1889,5 +1889,5 @@ A: `__file__` is the current Python file's path. `os.path.abspath()` makes it ab
 
 ---
 
-*Guide generated from full codebase analysis of AI Agent IDE v3.1/v4.0*  
+*Guide generated from full codebase analysis of AgentForge v3.1/v4.0*  
 *Total files analyzed: 40+ across backend, frontend, and prompts directories*

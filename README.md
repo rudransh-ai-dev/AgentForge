@@ -1,6 +1,6 @@
-# LocalAI — VRAM-Aware Multi-Agent IDE
+# AgentForge — VRAM-Aware Multi-Agent Code IDE
 
-> Production-grade, fully local AI Agent IDE built on Ollama. Seven specialized agents, 3-stage code pipeline, VRAM-aware scheduling, real-time canvas. No cloud. No API keys.
+> Production-grade, fully local multi-agent code IDE built on Ollama. Seven specialized agents, 3-stage code pipeline, VRAM-aware scheduling, real-time canvas. No cloud. No API keys.
 
 Built and tuned for **RTX 5070 Ti (16 GB GDDR7)**.
 
