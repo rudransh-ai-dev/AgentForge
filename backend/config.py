@@ -18,6 +18,11 @@ MODELS = {
         "size_gb": 6.6,
         "role": "routing_and_planning",
     },
+    "specifier": {
+        "name": "llama3.1:8b",
+        "size_gb": 6.6,
+        "role": "requirements_specification",
+    },
 
     # ── Production Coding Pipeline (3-Stage) ──
     # Demo config: writer and editor share the same model so the pipeline
@@ -69,7 +74,7 @@ MODELS = {
     "context_manager": {
         "name": "llama3.1:8b",
         "size_gb": 7.2,
-        "role": "context_summarization",
+        "role": "selective_context_and_retrieval",
         "pinned": True,
     },
 
@@ -121,10 +126,12 @@ TASK_ROUTER = {
     "web_search": "researcher",
     "read_code": "reader",
     "project_context": "reader",
+    "specification": "specifier",
 }
 
 AVAILABLE_MODELS = {
     "manager": "llama3.1:8b",
+    "specifier": "llama3.1:8b",
     "writer": "qwen2.5-coder:14b",
     "editor": "qwen2.5-coder:14b",
     "tester": "llama3.1:8b",

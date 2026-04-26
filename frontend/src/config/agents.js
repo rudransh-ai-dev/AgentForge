@@ -1,13 +1,14 @@
-import { Cpu, Terminal, BarChart3, ShieldCheck } from 'lucide-react';
+import { Cpu, Terminal, BarChart3, ShieldCheck, ClipboardCheck } from 'lucide-react';
 
 export const API = "";
 export const CHAT_API = "/persona";
 
 const AGENT_META = [
   { id: "manager", label: "Orchestrator", icon: Cpu, color: "#06b6d4", desc: "llama3.1:8b (Planning)" },
+  { id: "specifier", label: "Spec Agent", icon: ClipboardCheck, color: "#10b981", desc: "llama3.1:8b (Requirements)" },
   { id: "writer", label: "Senior Coder", icon: Terminal, color: "#a855f7", desc: "qwen2.5-coder:14b (Drafting)" },
   { id: "editor", label: "Code Editor", icon: Terminal, color: "#db2777", desc: "qwen2.5-coder:14b (Fixes)" },
-  { id: "tester", label: "QA Tester", icon: ShieldCheck, color: "#f59e0b", desc: "deepseek-r1:8b (Review)" },
+  { id: "tester", label: "QA Tester", icon: ShieldCheck, color: "#f59e0b", desc: "llama3.1:8b (Review)" },
   { id: "researcher", label: "Researcher", icon: BarChart3, color: "#22c55e", desc: "qwen2.5:14b (Data)" },
   { id: "heavy", label: "System Architect", icon: Cpu, color: "#6366f1", desc: "codestral:22b (Deep Think)" },
   { id: "context_manager", label: "Context Manager", icon: BarChart3, color: "#14b8a6", desc: "llama3.1:8b (Resident)" },

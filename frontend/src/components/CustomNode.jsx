@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { memo, useState } from 'react';
 import { Handle, Position, useReactFlow } from '@xyflow/react';
 import {
   Activity, Clock, FileCode2, Cpu, FileWarning, Send, Zap, Play,
@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useAgentStore } from '../store/useAgentStore';
 
-export default function CustomNode({ id, data }) {
+function CustomNode({ id, data }) {
   const { label, stateData: nodeStateData } = data;
   const { nodesState, availableModels, setCanvasNodeModel, canvasNodeModels, resetAll } = useAgentStore();
   const [nodePrompt, setNodePrompt] = useState('');
@@ -230,7 +230,7 @@ export default function CustomNode({ id, data }) {
                   <span className="break-all">{stateData.error}</span>
                 </div>
               ) : stateData.output ? (
-                <span className="whitespace-pre-wrap break-words">{String(stateData.output).slice(0, 300)}</span>
+                <span className="whitespace-pre-wrap break-words">{String(stateData.output).slice(0, 180)}</span>
               ) : (
                 <div className="text-[#6e7681] flex items-center justify-center h-full">
                   <Activity className="w-3 h-3 animate-spin mr-1" /> Processing...
@@ -305,3 +305,5 @@ export default function CustomNode({ id, data }) {
     </div>
   );
 }
+
+export default memo(CustomNode);

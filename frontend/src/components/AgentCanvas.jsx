@@ -10,11 +10,12 @@ const nodeTypes = { custom: CustomNode };
 
 const AGENT_MODELS = {
   manager: 'llama3.1:8b',
-  writer: 'gpt-oss:20b',
+  specifier: 'llama3.1:8b',
+  writer: 'qwen2.5-coder:14b',
   editor: 'qwen2.5-coder:14b',
-  tester: 'deepseek-r1:8b',
+  tester: 'llama3.1:8b',
   researcher: 'qwen2.5:14b',
-  heavy: 'phi4:latest',
+  heavy: 'codestral:22b',
   context_manager: 'llama3.1:8b',
   tool: 'llama3.1:8b',
   executor: 'sandbox',
@@ -22,7 +23,8 @@ const AGENT_MODELS = {
 
 const INITIAL_NODES = [
   { id: 'input', data: { label: 'User Input', stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 50, y: 300 } },
-  { id: 'manager', data: { label: 'Orchestrator', model: AGENT_MODELS.manager, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 300, y: 300 } },
+  { id: 'specifier', data: { label: 'Spec Agent', model: AGENT_MODELS.specifier, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 300, y: 300 } },
+  { id: 'manager', data: { label: 'Orchestrator', model: AGENT_MODELS.manager, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 500, y: 300 } },
   { id: 'writer', data: { label: 'Senior Coder', model: AGENT_MODELS.writer, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 100 } },
   { id: 'editor', data: { label: 'Code Editor', model: AGENT_MODELS.editor, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 250 } },
   { id: 'tester', data: { label: 'QA Tester', model: AGENT_MODELS.tester, stateData: { status: 'idle', output: '', input: '', error: '', metadata: {} } }, type: 'custom', position: { x: 650, y: 400 } },
@@ -33,9 +35,11 @@ const INITIAL_NODES = [
 ];
 
 const INITIAL_EDGES = [
-  { id: 'e-in-m', source: 'input', target: 'manager' },
+  { id: 'e-in-spec', source: 'input', target: 'specifier' },
+  { id: 'e-spec-m', source: 'specifier', target: 'manager' },
   { id: 'e-m-w', source: 'manager', target: 'writer' },
   { id: 'e-m-res', source: 'manager', target: 'researcher' },
+  { id: 'e-m-heavy', source: 'manager', target: 'heavy' },
   { id: 'e-w-e', source: 'writer', target: 'editor' },
   { id: 'e-e-t', source: 'editor', target: 'tester' },
   { id: 'e-t-e', source: 'tester', target: 'editor', animated: true, style: { strokeDasharray: '4,4', stroke: '#d29922' } },
@@ -79,15 +83,19 @@ function CanvasInner({ isFullscreen, setIsFullscreen }) {
         filter: `drop-shadow(0 0 6px rgba(${rgb},0.8))`
       });
       const dim = { stroke: '#21262d', strokeWidth: 1, opacity: 0.35, filter: 'none' };
-      if (e.id === 'e-in-m') {
-        const active = nodesState.manager?.status !== 'idle';
+      if (e.id === 'e-in-spec') {
+        const active = nodesState.specifier?.status !== 'idle';
+        return { ...e, animated: nodesState.specifier?.status === 'running', style: active ? glow('#10b981', '16,185,129') : { stroke: '#30363d', strokeWidth: 1.5 } };
+      }
+      if (e.id === 'e-spec-m') {
+        const active = nodesState.manager?.status !== 'idle' || nodesState.specifier?.status === 'success';
         return { ...e, animated: nodesState.manager?.status === 'running', style: active ? glow('#58a6ff', '88,166,255') : { stroke: '#30363d', strokeWidth: 1.5 } };
       }
       const targetAgent = e.target;
       const ns = nodesState[targetAgent];
-      if (['writer', 'editor', 'tester', 'researcher'].includes(targetAgent)) {
+      if (['writer', 'editor', 'tester', 'researcher', 'heavy'].includes(targetAgent)) {
         const isActive = routeTarget === targetAgent || ns?.status !== 'idle';
-        const colors = { writer: ['#a371f7', '163,113,247'], editor: ['#db2777', '219,39,119'], tester: ['#d29922', '210,153,34'], researcher: ['#3fb950', '63,185,80'] };
+        const colors = { writer: ['#a371f7', '163,113,247'], editor: ['#db2777', '219,39,119'], tester: ['#d29922', '210,153,34'], researcher: ['#3fb950', '63,185,80'], heavy: ['#6366f1', '99,102,241'] };
         const [c, rgb] = colors[targetAgent] || ['#58a6ff', '88,166,255'];
         return { ...e, animated: ns?.status === 'running', style: isActive ? glow(c, rgb) : dim };
       }

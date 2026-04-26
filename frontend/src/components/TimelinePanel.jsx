@@ -6,6 +6,7 @@ const API = "";
 
 const nodeColors = {
   manager: '#06b6d4',
+  specifier: '#10b981',
   writer: '#a855f7',
   editor: '#db2777',
   tester: '#f59e0b',

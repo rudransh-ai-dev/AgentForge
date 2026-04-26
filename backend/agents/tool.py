@@ -28,7 +28,10 @@ async def run_tool_agent_async(run_id: str, prompt: str, project_id: str | None 
         run_id, node_id, "start", input_str="Extracting project structure..."
     )
 
-    system_prompt = tool_prompt().format(prompt=prompt)
+    # Do not call str.format(prompt=prompt) here. Agent outputs often contain
+    # JSON keys like {"project_id": "..."}; raw str.format treats those braces
+    # as placeholders and raises KeyError before the tool can parse anything.
+    system_prompt = tool_prompt().replace("{prompt}", prompt)
 
     result_json = ""
     # FAST PATH: Deterministically parse the Hybrid JSON output from Coder Agent

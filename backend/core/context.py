@@ -91,3 +91,62 @@ def build_context_window(
     if parts:
         return "\n\n".join(parts) + f"\n\n[Current Task]:\n{current_prompt}"
     return current_prompt
+
+
+AGENT_CONTEXT_BUDGETS = {
+    "manager": 2600,
+    "writer": 5200,
+    "coder": 5200,
+    "editor": 5200,
+    "tester": 4400,
+    "critic": 4400,
+    "researcher": 5200,
+    "analyst": 3600,
+    "tool": 3000,
+    "executor": 2200,
+}
+
+
+def build_agent_context_window(
+    agent: str,
+    current_prompt: str,
+    *,
+    spec_block: str = "",
+    retrieval_block: str = "",
+    session_context: str = "",
+    previous_output: str = "",
+) -> str:
+    """
+    Build a selective context window for one agent.
+
+    V5 avoids sending full history to every agent. Each role gets the current
+    task plus only the context it can use: specs for everyone, retrieval for
+    reasoning/code roles, previous output for refinement/validation roles, and
+    a small session summary for continuity.
+    """
+    agent = (agent or "analyst").lower()
+    max_total = AGENT_CONTEXT_BUDGETS.get(agent, 3600)
+    parts = []
+
+    if spec_block:
+        parts.append(spec_block[:1000])
+
+    if retrieval_block and agent in {"manager", "writer", "coder", "editor", "researcher", "analyst", "critic", "tester"}:
+        parts.append(retrieval_block[:1800])
+
+    if previous_output and agent in {"editor", "tester", "critic", "tool", "executor"}:
+        budget = 1800 if agent in {"editor", "tester", "critic"} else 1200
+        parts.append(f"[Previous step output]\n{previous_output[:budget]}")
+
+    if session_context and agent in {"manager", "analyst", "researcher", "writer", "coder"}:
+        parts.append(f"[Session summary]\n{session_context[:900]}")
+
+    header = "\n\n".join(part for part in parts if part)
+    task = f"[Current Task]\n{current_prompt}"
+    if not header:
+        return current_prompt
+
+    remaining = max_total - len(task) - 2
+    if remaining <= 0:
+        return task[:max_total]
+    return f"{header[:remaining]}\n\n{task}"

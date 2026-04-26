@@ -3,6 +3,7 @@ from config import MODELS
 from pydantic import BaseModel, ConfigDict
 from services.sanitizer import extract_json_object, strip_prompt_leakage, auto_fix_json
 from core.prompts import planner_prompt
+from core.specification import build_task_spec
 import json
 import re
 import random
@@ -82,6 +83,7 @@ def _is_code_task(prompt: str) -> bool:
 
 def _deterministic_code_plan(prompt: str) -> dict:
     """Hard-coded plan for trivial code tasks — skip LLM planning entirely."""
+    spec = build_task_spec(prompt)
     slug = re.sub(r"[^a-z0-9]+", "_", prompt.lower())[:30].strip("_") or "project"
     return {
         "goal": prompt[:80],
@@ -89,7 +91,9 @@ def _deterministic_code_plan(prompt: str) -> dict:
         "complexity": "simple",
         "task_type": "code_generation",
         "confidence": 0.95,
+        "spec": spec.to_dict(),
         "steps": [
+            {"step": 0, "action": "specify", "description": "normalize requirements", "agent": "specifier"},
             {"step": 1, "action": "code", "description": prompt[:100], "agent": "coder"},
             {"step": 2, "action": "save_files", "description": "save to workspace", "agent": "tool"},
             {"step": 3, "action": "execute", "description": "run and test", "agent": "executor"},
@@ -101,12 +105,16 @@ async def plan_task_async(prompt: str, manager_model: str | None = None) -> dict
     """
     Planning Agent: Generates a multi-step execution plan and assigns task properties.
     """
+    spec = build_task_spec(prompt)
+
     # Deterministic fast-path: obvious code tasks skip the LLM planner
     # (the LLM frequently misclassifies "hello world" as a greeting)
     if _is_code_task(prompt):
         return _deterministic_code_plan(prompt)
 
-    plan_prompt = planner_prompt().format(prompt=prompt)
+    plan_prompt = planner_prompt().format(
+        prompt=f"{spec.to_prompt_block()}\n\nUser request:\n{prompt}"
+    )
     if manager_model:
         mgr_model = manager_model
     else:
@@ -149,6 +157,7 @@ async def plan_task_async(prompt: str, manager_model: str | None = None) -> dict
             "complexity": parsed.get("complexity", "simple"),
             "task_type": parsed.get("task_type", "analysis"),
             "confidence": float(parsed.get("confidence", 0.9)),
+            "spec": spec.to_dict(),
             "steps": steps,
         }
     except Exception as e:
@@ -170,6 +179,12 @@ async def plan_task_async(prompt: str, manager_model: str | None = None) -> dict
         agent = resolve_agent(task_type, 0.9)
 
         steps = [
+            {
+                "step": 0,
+                "action": "specify",
+                "description": "Normalize requirements",
+                "agent": "specifier",
+            },
             {
                 "step": 1,
                 "action": "code" if is_code else "analyze",
@@ -201,6 +216,7 @@ async def plan_task_async(prompt: str, manager_model: str | None = None) -> dict
             "complexity": "simple",
             "task_type": task_type,
             "confidence": 0.9,
+            "spec": spec.to_dict(),
             "steps": steps,
         }
 
@@ -233,4 +249,5 @@ async def route_task_async(
         **decision.model_dump(),
         "project_id": plan["project_id"],
         "goal": plan["goal"],
+        "spec": plan.get("spec", build_task_spec(prompt).to_dict()),
     }

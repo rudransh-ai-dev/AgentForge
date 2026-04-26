@@ -124,7 +124,7 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"status": "AI Orchestrator Running", "version": "3.1 — Full Pipeline"}
+    return {"status": "AI Orchestrator Running", "version": "5.0 — Spec + RAG + Validation Pipeline"}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -180,10 +180,34 @@ async def health():
     return {
         "backend": "running",
         "ollama": ollama_status["status"],
+        "version": "5.0",
+        "v5_features": {
+            "specification_agent": True,
+            "selective_context": True,
+            "local_retrieval": True,
+            "validator_gate": True,
+        },
         "models": ollama_status.get("models", []),
         "configured": configured_flat,
         "scheduler": get_scheduler_status(),
         "voice": is_whisper_available(),
+    }
+
+
+@app.get("/v5/status")
+def v5_status():
+    """Summarize V5 upgrade capabilities for the dashboard or interview demo."""
+    from core.retrieval import retrieve_context
+    return {
+        "version": "5.0",
+        "features": [
+            "deterministic specification agent",
+            "selective per-agent context windows",
+            "local docs/workspace/run retrieval",
+            "validator gate before code is accepted",
+            "session summarization after longer runs",
+        ],
+        "retrieval_probe_hits": len(retrieve_context("v5 upgrade context validation", limit=3)),
     }
 
 
@@ -377,6 +401,14 @@ def _resolve_node_handler(agent_id: str, prompt: str, model: Optional[str]):
     Falls back to the analyst for unknown / custom ids.
     """
     a = (agent_id or "").lower()
+
+    if a == "specifier":
+        from core.specification import build_task_spec
+
+        async def _spec_stream():
+            yield json.dumps(build_task_spec(prompt).to_dict(), indent=2)
+
+        return _spec_stream()
 
     # Coding pipeline agents
     if a in ("writer", "coder"):

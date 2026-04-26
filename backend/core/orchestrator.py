@@ -45,7 +45,9 @@ from core.memory import store_run, update_pattern
 from core.canvas_memory import create_run, update_run, add_step, update_step
 from services.metrics import record_run
 from core.session import get_session, add_turn, update_session, create_session
-from core.context import compress_context, build_context_window
+from core.context import compress_context, build_context_window, build_agent_context_window
+from core.specification import build_task_spec, TaskSpecification
+from core.retrieval import retrieve_context, format_retrieval_block
 from core.prompts import (
     critic_file_review_prompt,
     critic_recheck_prompt,
@@ -304,7 +306,17 @@ async def run_direct_mode(
 
 
 
-async def run_production_pipeline_async(prompt: str, run_id: str, project_id: str, emitter, allow_heavy: bool = False):
+async def run_production_pipeline_async(
+    prompt: str,
+    run_id: str,
+    project_id: str,
+    emitter,
+    allow_heavy: bool = False,
+    *,
+    spec_block: str = "",
+    retrieval_block: str = "",
+    session_context: str = "",
+):
     import time
     from services.vram_scheduler import release_model
 
@@ -323,12 +335,20 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
         writer_model = heavy_model
 
     # -- STAGE 1: WRITER --
+    writer_prompt_text = build_agent_context_window(
+        "writer",
+        prompt,
+        spec_block=spec_block,
+        retrieval_block=retrieval_block,
+        session_context=session_context,
+    )
+
     await emitter.emit(run_id, "writer", "start", input_str=f"Stage 1/3: {'🧠 Deep Think' if allow_heavy else 'Writer'} ({writer_model}) drafting architecture and code...")
     stage_start = time.time()
     draft_output = ""
     try:
         writer_chunks = 0
-        async for chunk in run_writer_async(prompt, model_override=writer_model):
+        async for chunk in run_writer_async(writer_prompt_text, model_override=writer_model):
             draft_output += chunk
             writer_chunks += 1
             if writer_chunks % 8 == 0:
@@ -349,6 +369,7 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
     max_retries = 1
     refined_output = draft_output
     tester_feedback = ""
+    tester_passed = False
     
     for attempt in range(max_retries + 1):
         # EDITOR PHASE
@@ -358,7 +379,14 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
         temp_refined = ""
         try:
             editor_chunks = 0
-            async for chunk in run_editor_async(prompt, draft_output, fix_instructions=tester_feedback):
+            editor_prompt_text = build_agent_context_window(
+                "editor",
+                prompt,
+                spec_block=spec_block,
+                retrieval_block=retrieval_block,
+                previous_output=draft_output,
+            )
+            async for chunk in run_editor_async(editor_prompt_text, draft_output, fix_instructions=tester_feedback):
                 temp_refined += chunk
                 editor_chunks += 1
                 if editor_chunks % 8 == 0:
@@ -379,7 +407,13 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
         try:
             # We concurrently stream visual output while calculating structured JSON verdict
             # Note: For strict correctness without complex async, we just get verdict directly
-            verdict = await validate_code(prompt, refined_output)
+            tester_prompt_text = build_agent_context_window(
+                "tester",
+                prompt,
+                spec_block=spec_block,
+                previous_output=refined_output,
+            )
+            verdict = await validate_code(tester_prompt_text, refined_output)
             
             summary = verdict.get("summary", "")
             bugs = verdict.get("bugs", [])
@@ -396,6 +430,7 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
             await emitter.emit(run_id, "tester", "complete", output_str=output_msg, metadata={"latency_ms": int((time.time() - stage_start) * 1000), "score": score, "verdict": state})
             
             if state == "PASS":
+                tester_passed = True
                 break
             else:
                 tester_feedback = verdict.get("fix_instructions", "")
@@ -405,6 +440,15 @@ async def run_production_pipeline_async(prompt: str, run_id: str, project_id: st
         except Exception as e:
             await emitter.emit(run_id, "tester", "error", error=str(e))
             break # Can't loop without a tester
+
+    if not tester_passed:
+        await emitter.emit(
+            run_id,
+            "manager",
+            "error",
+            error="Validator rejected the generated output after revision. Files were not saved.",
+        )
+        return None
             
     # Auto-Tool Saving
     # Note: run_tool_agent_async emits its own "tool start" with a more
@@ -473,13 +517,14 @@ async def run_agent_mode(
     add_step(run_id, 0, "manager", prompt[:5000], 
         MODELS["manager"]["name"] if isinstance(MODELS["manager"], dict) else MODELS["manager"])
 
-    # Build context from session
+    # Build compact session context. V5 injects it selectively per agent below
+    # instead of handing every model the whole running history.
+    session_ctx = ""
     context_prompt = prompt
     if session_id:
         session = get_session(session_id)
         if session:
             session_ctx = session.get("context_summary", "")
-            context_prompt = build_context_window(session_ctx, prompt)
 
     # ── Step 1: ROUTER + PLANNER ──
     await emitter.emit(run_id, "manager", "start", input_str=prompt)
@@ -509,6 +554,27 @@ async def run_agent_mode(
     goal = decision.get("goal", prompt[:80])
     project_id = decision.get("project_id", "project")
     confidence = decision.get("confidence", 1.0)
+    spec_data = decision.get("spec") or build_task_spec(prompt).to_dict()
+    spec = TaskSpecification(original_prompt=prompt, **spec_data)
+    spec_block = spec.to_prompt_block()
+    retrieval_hits = retrieve_context(prompt, limit=5)
+    retrieval_block = format_retrieval_block(retrieval_hits)
+
+    await emitter.emit(
+        run_id,
+        "specifier",
+        "complete",
+        output_str=json.dumps(spec.to_dict()),
+        metadata={"clarification_needed": spec.needs_clarification},
+    )
+
+    await emitter.emit(
+        run_id,
+        "context_manager",
+        "complete",
+        output_str=retrieval_block or "No local retrieval hits.",
+        metadata={"hits": len(retrieval_hits), "selective_context": True},
+    )
 
     router_latency = int((time.time() - start_time) * 1000)
 
@@ -529,6 +595,8 @@ async def run_agent_mode(
                 "confidence": confidence,
                 "steps_total": len(plan_steps),
                 "project_id": project_id,
+                "spec": spec.to_dict(),
+                "retrieval_hits": len(retrieval_hits),
             }
         ),
         metadata={
@@ -573,13 +641,20 @@ async def run_agent_mode(
     # ── Researcher Route: direct model call, no code pipeline ──
     if route == "researcher":
         researcher_model = _get_agent_model("researcher", allow_heavy)
+        researcher_prompt_text = build_agent_context_window(
+            "researcher",
+            prompt,
+            spec_block=spec_block,
+            retrieval_block=retrieval_block,
+            session_context=session_ctx,
+        )
         await emitter.emit(run_id, "researcher", "start",
             input_str=f"Researching: {prompt[:100]}...")
 
         result = ""
         res_start = time.time()
         try:
-            async for chunk in run_researcher_async(prompt):
+            async for chunk in run_researcher_async(researcher_prompt_text):
                 result += chunk
                 if len(result) % 80 == 0:
                     await emitter.emit(run_id, "researcher", "update", output_str=result)
@@ -605,7 +680,16 @@ async def run_agent_mode(
 
     # ── Production Code Pipeline (Writer → Editor → Tester) ──
     if route == "writer" or route == "coder" or (route == "coder" and is_complex_code_req):
-        final_result = await run_production_pipeline_async(prompt, run_id, project_id, emitter, allow_heavy)
+        final_result = await run_production_pipeline_async(
+            prompt,
+            run_id,
+            project_id,
+            emitter,
+            allow_heavy,
+            spec_block=spec_block,
+            retrieval_block=retrieval_block,
+            session_context=session_ctx,
+        )
         
         total_latency = int((time.time() - start_time) * 1000)
         
@@ -617,8 +701,23 @@ async def run_agent_mode(
             "success" if final_result else "error", session_id or "")
 
         if final_result:
+            if session_id:
+                add_turn(session_id, "user", prompt)
+                add_turn(session_id, "assistant", final_result[:3000], agent=route)
+                session = get_session(session_id)
+                if session and len(session["history"]) > 6:
+                    summary = await compress_context(session["history"])
+                    update_session(session_id, context_summary=summary, active_mode="agent")
+                else:
+                    update_session(session_id, active_mode="agent")
+
             update_run(run_id, status="success", total_latency_ms=total_latency)
             log_pipeline_end(run_id, "success", total_latency, 3) # approx 3 steps
+            await emitter.emit(
+                run_id, "system", "run_complete",
+                output_str=f"Pipeline finished in {total_latency}ms",
+                metadata={"total_latency_ms": total_latency, "steps": 3},
+            )
             return ExecutionResult(task_id=run_id, run_id=run_id, mode="agent", route=route, result=final_result[:3000], total_latency_ms=total_latency, status="success")
         else:
             update_run(run_id, status="error", total_latency_ms=total_latency)
@@ -669,11 +768,19 @@ async def run_agent_mode(
 
         agent_start = time.time()
         step_result = ""
+        agent_context_prompt = build_agent_context_window(
+            step_agent,
+            prompt,
+            spec_block=spec_block,
+            retrieval_block=retrieval_block,
+            session_context=session_ctx,
+            previous_output=final_result,
+        )
 
         try:
             if step_agent == "coder":
                 async for chunk in run_coder_async(
-                    context_prompt, model_override=model
+                    agent_context_prompt, model_override=model
                 ):
                     step_result += chunk
                     if len(step_result) % 50 == 0:
@@ -683,7 +790,7 @@ async def run_agent_mode(
 
             elif step_agent == "critic":
                 async for chunk in run_critic_async(
-                    context_prompt, model_override=model
+                    agent_context_prompt, model_override=model
                 ):
                     step_result += chunk
                     if len(step_result) % 50 == 0:
@@ -693,7 +800,7 @@ async def run_agent_mode(
 
             elif step_agent == "researcher":
                 async for chunk in run_researcher_async(
-                    context_prompt, model_override=model
+                    agent_context_prompt, model_override=model
                 ):
                     step_result += chunk
                     if len(step_result) % 50 == 0:
@@ -703,7 +810,7 @@ async def run_agent_mode(
 
             else:  # analyst
                 async for chunk in run_analyst_async(
-                    context_prompt, model_override=model
+                    agent_context_prompt, model_override=model
                 ):
                     step_result += chunk
                     if len(step_result) % 50 == 0:
@@ -742,6 +849,7 @@ async def run_agent_mode(
             )
 
             final_result = step_result
+            continue
 
         except Exception as e:
             local_error = str(e)
@@ -755,9 +863,9 @@ async def run_agent_mode(
         step_result = ""
         fb_start = time.time()
         try:
-            gen = (run_coder_async(context_prompt, model_override=LOCAL_FALLBACK)
+            gen = (run_coder_async(agent_context_prompt, model_override=LOCAL_FALLBACK)
                    if step_agent == "coder"
-                   else run_analyst_async(context_prompt, model_override=LOCAL_FALLBACK))
+                   else run_analyst_async(agent_context_prompt, model_override=LOCAL_FALLBACK))
             async for chunk in gen:
                 step_result += chunk
                 if len(step_result) % 80 == 0:

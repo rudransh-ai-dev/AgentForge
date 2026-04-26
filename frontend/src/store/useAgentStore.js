@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 const INITIAL_NODES_STATE = {
   manager: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
+  specifier: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
   writer: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
   editor: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
   tester: { status: 'idle', input: '', output: '', metadata: {}, error: '' },
@@ -71,7 +72,7 @@ export const useAgentStore = create((set) => ({
   })),
 
   addTimelineEvent: (event) => set((state) => ({
-    executionLog: [...state.executionLog, event]
+    executionLog: [...state.executionLog, event].slice(-160)
   })),
 
   clearExecutionLog: () => set({ executionLog: [], activeRunId: null }),

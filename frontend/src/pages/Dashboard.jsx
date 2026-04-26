@@ -119,6 +119,8 @@ export default function Dashboard() {
   const wsRef = useRef(null);
   const [wsStatus, setWsStatus] = useState('disconnected');
   const storeRef = useRef({ updateNode: null, addTimelineEvent: null });
+  const lastNodeUpdateRef = useRef({});
+  const lastTimelineUpdateRef = useRef(0);
   storeRef.current.updateNode = useAgentStore.getState().updateNode;
   storeRef.current.addTimelineEvent = useAgentStore.getState().addTimelineEvent;
 
@@ -168,13 +170,20 @@ export default function Dashboard() {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          storeRef.current.addTimelineEvent(data);
           const { run_id, node_id, type, input, output, metadata, error } = data;
+          const now = performance.now();
+          const shouldLogTimeline = type !== 'update' || now - lastTimelineUpdateRef.current > 250;
+          if (shouldLogTimeline) {
+            storeRef.current.addTimelineEvent(data);
+            if (type === 'update') lastTimelineUpdateRef.current = now;
+          }
           if (type === 'start') {
             storeRef.current.updateNode(run_id, node_id, { status: 'running', input: input || '', output: '', error: '' });
           } else if (type === 'update') {
             const existing = useAgentStore.getState().nodesState[node_id];
-            if (existing?.status !== 'success') {
+            const last = lastNodeUpdateRef.current[node_id] || 0;
+            if (existing?.status !== 'success' && now - last > 160) {
+              lastNodeUpdateRef.current[node_id] = now;
               storeRef.current.updateNode(run_id, node_id, { output });
             }
           } else if (type === 'complete') {

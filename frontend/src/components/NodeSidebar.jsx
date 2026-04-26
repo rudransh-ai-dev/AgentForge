@@ -15,6 +15,14 @@ const NODE_TYPES = [
   },
   {
     type: 'custom',
+    label: 'Spec Agent',
+    icon: Sparkles,
+    color: '#10b981',
+    description: 'V5 requirements normalizer',
+    model: 'llama3.1:8b',
+  },
+  {
+    type: 'custom',
     label: 'Orchestrator',
     icon: Cpu,
     color: '#06b6d4',
@@ -43,7 +51,7 @@ const NODE_TYPES = [
     icon: Zap,
     color: '#d29922',
     description: 'Tester agent — adversarial QA validation',
-    model: 'deepseek-r1:8b',
+    model: 'llama3.1:8b',
   },
   {
     type: 'custom',
@@ -66,7 +74,7 @@ const NODE_TYPES = [
     icon: BrainCircuit,
     color: '#6366f1',
     description: 'Heavy brain for complex architecture',
-    model: 'phi4:latest',
+    model: 'codestral:22b',
   },
 ];
 

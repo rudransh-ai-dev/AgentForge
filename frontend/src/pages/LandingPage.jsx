@@ -87,7 +87,7 @@ export default function LandingPage({ onEnter }) {
             className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-canvasSubtle/80 backdrop-blur-sm border border-borderDefault text-fgMuted text-xs font-medium mb-6 animate-border-glow"
           >
             <Network className="w-3.5 h-3.5" />
-            v4.2 Local Orchestrator
+            v5.0 Local Orchestrator
           </motion.div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6">
