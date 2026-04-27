@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Terminal, Activity, Search, Cpu, Zap, BrainCircuit, Network,
   FolderTree, Clock, Wifi, MessageSquare, MessageCircle, Square, WifiOff,
-  AlertTriangle, CheckCircle2, Loader2, PanelLeftClose, PanelLeft, BarChart3, Users
+  AlertTriangle, CheckCircle2, Loader2, PanelLeftClose, PanelLeft, BarChart3, Users,
+  ShieldCheck, Palette
 } from 'lucide-react';
 import AgentCanvas from '../components/AgentCanvas';
 import WorkspaceExplorer from '../components/WorkspaceExplorer';
@@ -459,8 +460,6 @@ export default function Dashboard() {
           <TopClock />
           <ConnectionStatus health={health} wsStatus={wsStatus} />
 
-
-
           <motion.button
             onClick={handleClearLogs}
             whileHover={{ scale: 1.02 }}
@@ -485,6 +484,8 @@ export default function Dashboard() {
           </motion.button>
         </div>
       </div>
+
+
 
       {/* ══════════════════════════════════════════════════════
           SIDEBAR + CONTENT ROW

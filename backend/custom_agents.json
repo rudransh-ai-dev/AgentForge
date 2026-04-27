@@ -1,38 +1,29 @@
 [
   {
-    "id": "python_ex",
-    "name": "python ex",
-    "model": "gpt-oss:20b",
-    "system_prompt": "you do python codes ",
-    "color": "#58a6ff",
-    "icon": "Cpu",
-    "created_at": 1776078972.7512357
-  },
-  {
-    "id": "image_maker_",
-    "name": "image maker ",
-    "model": "gemma4:e4b",
-    "system_prompt": "hye i make images ",
+    "id": "cyber_guardian",
+    "name": "Cyber Guardian",
+    "model": "deepseek-r1:8b",
+    "system_prompt": "You are a cybersecurity expert. Analyze code for vulnerabilities (OWASP Top 10, memory leaks, etc.).",
     "color": "#f85149",
-    "icon": "Cpu",
-    "created_at": 1776169674.024024
+    "icon": "ShieldCheck",
+    "created_at": 1777313537.4692657
   },
   {
-    "id": "c++",
-    "name": "c++",
-    "model": "gpt-oss:20b",
-    "system_prompt": "you need to code in c++",
+    "id": "performance_architect",
+    "name": "Performance Architect",
+    "model": "codestral:22b",
+    "system_prompt": "You specialize in extreme optimization. Suggest algorithmic improvements and low-level performance tweaks.",
     "color": "#d29922",
-    "icon": "Cpu",
-    "created_at": 1776222963.5363724
+    "icon": "Zap",
+    "created_at": 1777313537.4692671
   },
   {
-    "id": "yagsh",
-    "name": "Yagsh",
-    "model": "hf.co/TrevorJS/gemma-4-E2B-it-uncensored-GGUF:Q4_K_M",
-    "system_prompt": "Gsgsjsbs",
-    "color": "#db61a2",
-    "icon": "Cpu",
-    "created_at": 1776239138.3550072
+    "id": "ui_visionary",
+    "name": "UI Visionary",
+    "model": "qwen2.5:14b",
+    "system_prompt": "You are a world-class UI/UX designer. Suggest modern aesthetics, animations, and accessible patterns.",
+    "color": "#a371f7",
+    "icon": "Palette",
+    "created_at": 1777313537.4692676
   }
 ]
